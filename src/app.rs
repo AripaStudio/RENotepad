@@ -8,7 +8,7 @@ use crate::encoding::{self, Encoding};
 use crate::settings::Settings;
 use crate::status::{self, Status};
 use crate::theme::{self, Theme};
-use crate::{filedlg, jumplist, muldiv, print, text, update, wide};
+use crate::{filedlg, jumplist, muldiv, print, syntax, text, update, wide};
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::DataExchange::IsClipboardFormatAvailable;
@@ -54,6 +54,7 @@ const IDM_SELECT_ALL: u16 = 26;
 const IDM_TIME_DATE: u16 = 27;
 const IDM_WRAP: u16 = 32;
 const IDM_FONT: u16 = 33;
+const IDM_SYNTAX: u16 = 34;
 const IDM_ZOOM_IN: u16 = 40;
 const IDM_ZOOM_OUT: u16 = 41;
 const IDM_ZOOM_RESET: u16 = 42;
@@ -152,6 +153,8 @@ pub struct App {
     pub find_dlg: HWND,
     find_is_replace: bool,
     font: HFONT,
+    /// `font` at a zoom level, for drawing syntax colors: (zoom, font).
+    syntax_font: (i32, HFONT),
     dpi: u32,
     pub settings: Settings,
     chrome: Chrome,
@@ -207,6 +210,7 @@ pub fn create(cmd_show: i32, args: &text::Args) -> Option<()> {
             find_dlg: std::ptr::null_mut(),
             find_is_replace: false,
             font: std::ptr::null_mut(),
+            syntax_font: (0, std::ptr::null_mut()),
             dpi: 96,
             settings,
             chrome: Chrome::new(96),
@@ -380,6 +384,7 @@ fn build_menus() -> [HMENU; MENU_COUNT] {
         AppendMenuW(view, MF_POPUP, zoom as usize, w.as_ptr());
         add(view, IDM_STATUS_BAR, "&Status bar");
         add(view, IDM_WRAP, "&Word wrap");
+        add(view, IDM_SYNTAX, "Syntax &highlighting");
 
         let settings = CreatePopupMenu();
         let themes = CreatePopupMenu();
@@ -431,6 +436,10 @@ impl App {
                 *d = s;
             }
             self.font = CreateFontIndirectW(&lf);
+            if !self.syntax_font.1.is_null() {
+                DeleteObject(self.syntax_font.1);
+                self.syntax_font = (0, std::ptr::null_mut());
+            }
             for d in &self.docs {
                 SendMessageW(d.edit, WM_SETFONT, self.font as usize, 1);
             }
@@ -1180,6 +1189,45 @@ impl App {
         self.update_status();
     }
 
+    /// Syntax colors over what `edit` just drew; `hdc` is null for the screen.
+    fn paint_syntax(&mut self, edit: HWND, hdc: HDC) {
+        if !self.settings.syntax {
+            return;
+        }
+        let Some(d) = self.docs.iter().find(|d| d.edit == edit) else { return };
+        let Some(lang) = d.path.as_deref().and_then(syntax::Lang::from_path) else { return };
+        let font = self.zoomed_font(d.zoom);
+        unsafe {
+            if !hdc.is_null() {
+                syntax::paint(edit, hdc, lang, font);
+                return;
+            }
+            if IsWindowVisible(edit) == 0 {
+                return;
+            }
+            let dc = GetDC(edit);
+            syntax::paint(edit, dc, lang, font);
+            ReleaseDC(edit, dc);
+        }
+    }
+
+    /// The control scales its own font when zoomed; the colors must be drawn with the same size.
+    fn zoomed_font(&mut self, zoom: i32) -> HFONT {
+        if self.syntax_font.0 == zoom && !self.syntax_font.1.is_null() {
+            return self.syntax_font.1;
+        }
+        unsafe {
+            if !self.syntax_font.1.is_null() {
+                DeleteObject(self.syntax_font.1);
+            }
+            let mut lf: LOGFONTW = std::mem::zeroed();
+            GetObjectW(self.font, std::mem::size_of::<LOGFONTW>() as i32, (&mut lf as *mut LOGFONTW).cast());
+            lf.lfHeight = muldiv(lf.lfHeight, zoom, 100);
+            self.syntax_font = (zoom, CreateFontIndirectW(&lf));
+        }
+        self.syntax_font.1
+    }
+
     fn toggle_wrap(&mut self) {
         self.settings.wrap = !self.settings.wrap;
         for i in 0..self.docs.len() {
@@ -1323,6 +1371,7 @@ impl App {
             en(IDM_REPLACE, has_text);
             en(IDM_PIN, self.doc().path.is_some());
             ck(IDM_WRAP, self.settings.wrap);
+            ck(IDM_SYNTAX, self.settings.syntax);
             ck(IDM_STATUS_BAR, self.settings.status_bar);
             let picked = IDM_THEME_FIRST + self.settings.theme as u16;
             CheckMenuRadioItem(menu, IDM_THEME_FIRST as u32, IDM_THEME_LAST as u32, picked as u32, MF_BYCOMMAND);
@@ -1392,6 +1441,12 @@ impl App {
                 IDM_TIME_DATE => self.replace_sel(&text::timestamp(false)),
                 IDM_WRAP => self.toggle_wrap(),
                 IDM_FONT => self.choose_font(),
+                IDM_SYNTAX => {
+                    self.settings.syntax = !self.settings.syntax;
+                    for d in &self.docs {
+                        InvalidateRect(d.edit, std::ptr::null(), 1);
+                    }
+                }
                 IDM_ZOOM_IN => self.set_zoom(self.doc().zoom + 10),
                 IDM_ZOOM_OUT => self.set_zoom(self.doc().zoom - 10),
                 IDM_ZOOM_RESET => self.set_zoom(100),
@@ -1811,6 +1866,20 @@ unsafe extern "system" fn edit_subclass(hwnd: HWND, msg: u32, wparam: WPARAM, lp
         // MK_CONTROL: the control just zoomed itself.
         if let Some(a) = try_app() {
             a.sync_zoom();
+        }
+    }
+    // The control draws typing, selection and scrolling straight to the
+    // screen (no WM_PAINT), so the colors go back on after each of those too.
+    let repaints = match msg {
+        WM_PAINT | WM_PRINTCLIENT | WM_CHAR | WM_KEYDOWN | WM_PASTE | WM_CUT | WM_CLEAR | WM_UNDO | EM_UNDO | EM_REPLACESEL
+        | EM_SETSEL | WM_SETTEXT | WM_VSCROLL | WM_HSCROLL | WM_MOUSEWHEEL | WM_TIMER | WM_LBUTTONDOWN | WM_LBUTTONUP
+        | WM_LBUTTONDBLCLK => true,
+        WM_MOUSEMOVE => wparam & 0x0001 != 0, // MK_LBUTTON: dragging a selection
+        _ => false,
+    };
+    if repaints {
+        if let Some(a) = try_app() {
+            a.paint_syntax(hwnd, if msg == WM_PRINTCLIENT { wparam as HDC } else { std::ptr::null_mut() });
         }
     }
     r

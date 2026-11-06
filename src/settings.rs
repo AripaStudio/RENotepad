@@ -20,6 +20,8 @@ pub struct Settings {
     pub charset: u8,
     pub wrap: bool,
     pub status_bar: bool,
+    /// Color .json/.toml/.xml/.log/.kt/.java files.
+    pub syntax: bool,
     pub theme: Theme,
     /// Ask GitHub for a newer release at startup.
     pub check_updates: bool,
@@ -44,6 +46,7 @@ impl Default for Settings {
             charset: 1, // DEFAULT_CHARSET
             wrap: false,
             status_bar: true,
+            syntax: true,
             theme: Theme::Dark,
             check_updates: true,
             match_case: false,
@@ -130,6 +133,7 @@ impl Settings {
         s.charset = k.dword("lfCharSet").map_or(s.charset, |v| v as u8);
         s.wrap = flag("fWrap", s.wrap);
         s.status_bar = flag("StatusBar", s.status_bar);
+        s.syntax = flag("fSyntax", s.syntax);
         // Before themes there was only fDarkMode; it still decides when Theme is missing.
         s.theme = match k.string("Theme").and_then(|t| Theme::from_name(&t)) {
             Some(t) => t,
@@ -167,6 +171,7 @@ impl Settings {
         k.set_dword("lfCharSet", self.charset as i32);
         k.set_dword("fWrap", self.wrap as i32);
         k.set_dword("StatusBar", self.status_bar as i32);
+        k.set_dword("fSyntax", self.syntax as i32);
         k.set_string("Theme", self.theme.name());
         k.set_dword("fDarkMode", self.theme.is_dark() as i32);
         k.set_dword("fCheckUpdates", self.check_updates as i32);

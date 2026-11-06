@@ -3,14 +3,15 @@
 //! usual set of pieces: uxtheme's (undocumented, ordinal-only) app-mode calls
 //! for popup menus and scrollbars, and WM_CTLCOLOR* for the edit and dialogs.
 
+use crate::syntax::Kind;
 use crate::{muldiv, wide};
 use std::sync::atomic::{AtomicU8, Ordering};
 use windows_sys::Win32::Foundation::{COLORREF, HWND, LPARAM, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
 use windows_sys::Win32::Graphics::Gdi::{
-    CreateFontIndirectW, CreateSolidBrush, EnumFontFamiliesExW, FillRect, GetDC, GetStockObject, ReleaseDC, SetBkColor,
-    SetDCBrushColor, SetPixelV, SetTextColor, CLEARTYPE_QUALITY, DC_BRUSH, DEFAULT_CHARSET, HBRUSH, HDC, HFONT, LOGFONTW,
-    TEXTMETRICW,
+    CreateFontIndirectW, CreateSolidBrush, EnumFontFamiliesExW, FillRect, GetDC, GetStockObject, GetSysColor, ReleaseDC,
+    SetBkColor, SetDCBrushColor, SetPixelV, SetTextColor, CLEARTYPE_QUALITY, COLOR_WINDOW, DC_BRUSH, DEFAULT_CHARSET, HBRUSH,
+    HDC, HFONT, LOGFONTW, TEXTMETRICW,
 };
 use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_SYSTEM32};
 use windows_sys::Win32::UI::Controls::SetWindowTheme;
@@ -190,6 +191,89 @@ const LIGHT_PALETTE: Palette = Palette {
     close_text: rgb(255, 255, 255),
 };
 
+/// Editor syntax colors, from each theme's own editor scheme (Light+/Dark+ for Light/Dark).
+pub struct Syntax {
+    pub keyword: COLORREF,
+    pub type_: COLORREF,
+    pub string: COLORREF,
+    pub number: COLORREF,
+    pub comment: COLORREF,
+    pub name: COLORREF,
+    pub tag: COLORREF,
+    pub error: COLORREF,
+    pub warning: COLORREF,
+    pub muted: COLORREF,
+}
+
+impl Syntax {
+    pub fn color(&self, kind: Kind) -> COLORREF {
+        match kind {
+            Kind::Keyword => self.keyword,
+            Kind::Type => self.type_,
+            Kind::String => self.string,
+            Kind::Number => self.number,
+            Kind::Comment => self.comment,
+            Kind::Name => self.name,
+            Kind::Tag => self.tag,
+            Kind::Error => self.error,
+            Kind::Warning => self.warning,
+            Kind::Muted => self.muted,
+        }
+    }
+}
+
+const LIGHT_SYNTAX: Syntax = Syntax {
+    keyword: rgb(0, 0, 255),
+    type_: rgb(38, 127, 153),
+    string: rgb(163, 21, 21),
+    number: rgb(9, 134, 88),
+    comment: rgb(0, 128, 0),
+    name: rgb(4, 81, 165),
+    tag: rgb(128, 0, 0),
+    error: rgb(229, 20, 0),
+    warning: rgb(191, 136, 3),
+    muted: rgb(128, 128, 128),
+};
+
+const DARK_SYNTAX: Syntax = Syntax {
+    keyword: rgb(86, 156, 214),
+    type_: rgb(78, 201, 176),
+    string: rgb(206, 145, 120),
+    number: rgb(181, 206, 168),
+    comment: rgb(106, 153, 85),
+    name: rgb(156, 220, 254),
+    tag: rgb(86, 156, 214),
+    error: rgb(244, 71, 71),
+    warning: rgb(204, 167, 0),
+    muted: rgb(128, 128, 128),
+};
+
+const ONE_DARK_SYNTAX: Syntax = Syntax {
+    keyword: rgb(198, 120, 221),
+    type_: rgb(229, 192, 123),
+    string: rgb(152, 195, 121),
+    number: rgb(209, 154, 102),
+    comment: rgb(92, 99, 112),
+    name: rgb(97, 175, 239),
+    tag: rgb(224, 108, 117),
+    error: rgb(224, 108, 117),
+    warning: rgb(229, 192, 123),
+    muted: rgb(127, 132, 142),
+};
+
+const NORD_SYNTAX: Syntax = Syntax {
+    keyword: rgb(129, 161, 193),
+    type_: rgb(143, 188, 187),
+    string: rgb(163, 190, 140),
+    number: rgb(180, 142, 173),
+    comment: rgb(97, 110, 136),
+    name: rgb(136, 192, 208),
+    tag: rgb(129, 161, 193),
+    error: rgb(191, 97, 106),
+    warning: rgb(235, 203, 139),
+    muted: rgb(123, 136, 161),
+};
+
 static CURRENT: AtomicU8 = AtomicU8::new(Theme::Dark as u8);
 
 pub fn current() -> Theme {
@@ -207,6 +291,20 @@ pub fn palette() -> &'static Palette {
         Theme::OneDark => &ONE_DARK_PALETTE,
         Theme::Nord => &NORD_PALETTE,
     }
+}
+
+pub fn syntax() -> &'static Syntax {
+    match current() {
+        Theme::Light => &LIGHT_SYNTAX,
+        Theme::Dark => &DARK_SYNTAX,
+        Theme::OneDark => &ONE_DARK_SYNTAX,
+        Theme::Nord => &NORD_SYNTAX,
+    }
+}
+
+/// The editor's background, whether ours (dark themes) or the stock window color.
+pub fn edit_bg() -> COLORREF {
+    controls().map_or_else(|| unsafe { GetSysColor(COLOR_WINDOW) }, |c| c.edit_bg)
 }
 
 /// None in light mode, where controls keep their stock colors.

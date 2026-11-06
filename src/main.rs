@@ -12,6 +12,7 @@ mod jumplist;
 mod print;
 mod settings;
 mod status;
+mod syntax;
 mod text;
 mod theme;
 mod update;
