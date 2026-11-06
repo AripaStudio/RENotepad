@@ -30,6 +30,12 @@ function Click($x, $y, $down = 0x201, $up = 0x202) {
 
 Check 'title names the file' (Title $main) 'renotepad-smoke.txt - RENotepad'
 
+# Another program writing to the open file: the tab picks it up by itself.
+[IO.File]::AppendAllText($File, "epsilon`r`n"); Start-Sleep -Milliseconds 1500
+Check 'outside change is reloaded' ((Text $edit) -replace "`r`n", '|') 'alpha beta|gamma beta|delta|epsilon|'
+[IO.File]::WriteAllText($File, "alpha beta`r`ngamma beta`r`ndelta`r`n"); Start-Sleep -Milliseconds 1500
+Check 'reload keeps the tab unmodified' (Title $main) 'renotepad-smoke.txt - RENotepad'
+
 # Find: Alt+R on the "Wrap around" label must tick the box; third Find Next must wrap.
 Cmd $main 21
 $find = Wait-Top $p.Id '#32770' 'Find'

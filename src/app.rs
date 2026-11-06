@@ -89,6 +89,10 @@ const EC_ENDOFLINE_CRLF: usize = 1;
 
 const MAX_FILE: u64 = 1 << 30;
 
+/// How often open files are checked for changes made by other programs.
+const WATCH_TIMER: usize = 1;
+const WATCH_MS: u32 = 1000;
+
 // Find / Replace dialog control ids.
 const IDC_FIND_TEXT: u16 = 1152;
 const IDC_REPLACE_TEXT: u16 = 1153;
@@ -105,6 +109,8 @@ struct Doc {
     path: Option<String>,
     encoding: Encoding,
     zoom: i32,
+    /// The file's (modified time, size) when last loaded or saved.
+    stamp: Option<(std::time::SystemTime, u64)>,
 }
 
 /// Menu-bar keyboard/mouse navigation while a popup is open. Written by the
@@ -267,6 +273,7 @@ pub fn create(cmd_show: i32, args: &text::Args) -> Option<()> {
         if a.settings.check_updates {
             update::check_async(hwnd, false);
         }
+        SetTimer(hwnd, WATCH_TIMER, WATCH_MS, None);
         SetFocus(a.edit());
         Some(())
     }
@@ -716,7 +723,7 @@ impl App {
 
     fn new_tab(&mut self) {
         let edit = self.make_edit(&[], (0, 0), false, 100);
-        self.docs.push(Doc { edit, path: None, encoding: Encoding::Utf8, zoom: 100 });
+        self.docs.push(Doc { edit, path: None, encoding: Encoding::Utf8, zoom: 100, stamp: None });
         self.switch_to(self.docs.len() - 1);
     }
 
@@ -879,6 +886,7 @@ impl App {
         let d = self.doc_mut();
         d.path = Some(path.to_string());
         d.encoding = enc;
+        d.stamp = file_stamp(path);
         if text::is_log_file(&content) {
             let end = content.len();
             unsafe {
@@ -895,6 +903,47 @@ impl App {
         self.update_status();
         self.fit_scrollbars();
         true
+    }
+
+    /// Pick up changes other programs made to open files (a log being written,
+    /// say). Tabs with unsaved edits are left alone so nothing typed is lost.
+    fn reload_changed(&mut self) {
+        for i in 0..self.docs.len() {
+            let Some(path) = self.docs[i].path.clone() else { continue };
+            let Some(stamp) = file_stamp(&path) else { continue };
+            if Some(stamp) == self.docs[i].stamp || stamp.1 >= MAX_FILE || self.doc_modified(i) {
+                continue;
+            }
+            // Still locked mid-write: try again on the next tick.
+            let Ok(bytes) = std::fs::read(&path) else { continue };
+            self.docs[i].stamp = Some(stamp);
+            let content = encoding::decode(&bytes, self.docs[i].encoding);
+            let e = self.docs[i].edit;
+            unsafe {
+                let (mut s, mut end) = (0u32, 0u32);
+                SendMessageW(e, EM_GETSEL, &mut s as *mut u32 as usize, &mut end as *mut u32 as isize);
+                let at_end = end as i32 >= GetWindowTextLengthW(e);
+                let top = SendMessageW(e, EM_GETFIRSTVISIBLELINE, 0, 0);
+                SendMessageW(e, WM_SETREDRAW, 0, 0);
+                set_edit_text(e, &content);
+                SendMessageW(e, EM_SETMODIFY, 0, 0);
+                if at_end {
+                    // The caret was at the end: follow the file as it grows, like `tail -f`.
+                    SendMessageW(e, EM_SETSEL, content.len(), content.len() as isize);
+                    SendMessageW(e, EM_SCROLLCARET, 0, 0);
+                } else {
+                    SendMessageW(e, EM_SETSEL, s as usize, end as isize);
+                    SendMessageW(e, EM_LINESCROLL, 0, top);
+                }
+                SendMessageW(e, WM_SETREDRAW, 1, 0);
+                InvalidateRect(e, std::ptr::null(), 1);
+            }
+            if i == self.cur {
+                self.update_title();
+                self.update_status();
+                self.fit_scrollbars();
+            }
+        }
     }
 
     fn write(&mut self, path: &str, enc: Encoding) -> bool {
@@ -916,6 +965,7 @@ impl App {
         let d = self.doc_mut();
         d.path = Some(path.to_string());
         d.encoding = enc;
+        d.stamp = file_stamp(path);
         unsafe { SendMessageW(self.edit(), EM_SETMODIFY, 0, 0) };
         self.update_title();
         self.invalidate_chrome();
@@ -1415,6 +1465,11 @@ fn set_edit_text(edit: HWND, text: &[u16]) {
     unsafe { SetWindowTextW(edit, t.as_ptr()) };
 }
 
+fn file_stamp(path: &str) -> Option<(std::time::SystemTime, u64)> {
+    let m = std::fs::metadata(path).ok()?;
+    Some((m.modified().ok()?, m.len()))
+}
+
 fn point(lparam: LPARAM) -> (i32, i32) {
     ((lparam & 0xFFFF) as i16 as i32, ((lparam >> 16) & 0xFFFF) as i16 as i32)
 }
@@ -1623,6 +1678,10 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 return 0;
             }
             a.command(id);
+            0
+        }
+        WM_TIMER if wparam == WATCH_TIMER => {
+            a.reload_changed();
             0
         }
         WM_INITMENUPOPUP => {
