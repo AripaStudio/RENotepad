@@ -18,8 +18,8 @@ use windows_sys::Win32::UI::Controls::Dialogs::{ChooseFontW, CF_ENABLEHOOK, CF_I
 use windows_sys::Win32::UI::Controls::*;
 use windows_sys::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    EnableWindow, GetCapture, ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT, VK_DOWN,
-    VK_LEFT, VK_RIGHT,
+    EnableWindow, GetCapture, GetKeyState, ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT,
+    VK_BACK, VK_CONTROL, VK_DOWN, VK_LEFT, VK_RIGHT,
 };
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, DragAcceptFiles, DragFinish, DragQueryFileW, SHAddToRecentDocs, SetWindowSubclass, HDROP, SHARD_PATHW};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
@@ -1861,6 +1861,19 @@ unsafe extern "system" fn caret_event(_: HWINEVENTHOOK, _: u32, hwnd: HWND, id_o
 }
 
 unsafe extern "system" fn edit_subclass(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM, _: usize, _: usize) -> LRESULT {
+    // The edit control types Ctrl+Backspace (0x7F) and unbound Ctrl+letters
+    // in as raw control characters. Ctrl+C/V/X/Z (0x03/0x16/0x18/0x1A) must
+    // get through: the control does copy/paste/cut/undo off those.
+    if msg == WM_CHAR && (wparam == 0x7F || (wparam < 0x20 && ![0x03, 0x08, 0x09, 0x0A, 0x0D, 0x16, 0x18, 0x1A].contains(&wparam))) {
+        return 0;
+    }
+    if msg == WM_KEYDOWN && wparam == VK_BACK as usize && GetKeyState(VK_CONTROL as i32) < 0 {
+        delete_word_back(hwnd);
+        if let Some(a) = try_app() {
+            a.paint_syntax(hwnd, std::ptr::null_mut());
+        }
+        return 0;
+    }
     let r = DefSubclassProc(hwnd, msg, wparam, lparam);
     if msg == WM_MOUSEWHEEL && (wparam & 0x0008) != 0 {
         // MK_CONTROL: the control just zoomed itself.
@@ -1883,6 +1896,50 @@ unsafe extern "system" fn edit_subclass(hwnd: HWND, msg: u32, wparam: WPARAM, lp
         }
     }
     r
+}
+
+/// Ctrl+Backspace: deletes back to the start of the word before the caret
+/// (and the spaces after it), or just the selection if there is one.
+unsafe fn delete_word_back(edit: HWND) {
+    let (mut s, mut e) = (0u32, 0u32);
+    SendMessageW(edit, EM_GETSEL, &mut s as *mut u32 as usize, &mut e as *mut u32 as isize);
+    if s != e {
+        SendMessageW(edit, WM_CHAR, 0x08, 0);
+        return;
+    }
+    let line = SendMessageW(edit, EM_LINEFROMCHAR, e as usize, 0) as usize;
+    let start = SendMessageW(edit, EM_LINEINDEX, line, 0) as u32;
+    let col = (e - start) as usize;
+    if col == 0 {
+        SendMessageW(edit, WM_CHAR, 0x08, 0); // joins with the line above
+        return;
+    }
+    // EM_GETLINE reads the buffer size from its first WORD, so lines longer
+    // than that are read from the whole text.
+    let buf = if col <= 0xFFFF {
+        let mut buf = vec![0u16; col];
+        buf[0] = col as u16;
+        let got = SendMessageW(edit, EM_GETLINE, line, buf.as_mut_ptr() as isize) as usize;
+        buf.truncate(got.min(col));
+        buf
+    } else {
+        get_edit_text(edit)[start as usize..e as usize].to_vec()
+    };
+    let before = &buf[..];
+    let is_space = |c: u16| c == b' ' as u16 || c == b'\t' as u16;
+    let mut i = before.len();
+    while i > 0 && is_space(before[i - 1]) {
+        i -= 1;
+    }
+    if i > 0 {
+        let word = syntax::is_ident(before[i - 1]);
+        while i > 0 && !is_space(before[i - 1]) && syntax::is_ident(before[i - 1]) == word {
+            i -= 1;
+        }
+    }
+    SendMessageW(edit, EM_SETSEL, start as usize + i, e as isize);
+    let empty = [0u16];
+    SendMessageW(edit, EM_REPLACESEL, 1, empty.as_ptr() as isize);
 }
 
 unsafe extern "system" fn font_hook(dlg: HWND, msg: u32, wparam: WPARAM, _: LPARAM) -> usize {

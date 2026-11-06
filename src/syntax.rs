@@ -93,7 +93,7 @@ fn ch(c: u16) -> char {
     char::from_u32(c as u32).unwrap_or('\u{FFFD}')
 }
 
-fn is_ident(c: u16) -> bool {
+pub fn is_ident(c: u16) -> bool {
     c == b'_' as u16 || ch(c).is_alphanumeric()
 }
 
