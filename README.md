@@ -229,6 +229,7 @@ pwsh tests/ui/installer.ps1 # install, reinstall, uninstall (only if not install
 - `assets/`: the icon, plus `make_icon.py`, which draws it (needs Pillow).
 - `installer/RENotepad.iss`: the Inno Setup installer.
 - `scripts/package.ps1`: builds the release assets.
+- `scripts/install.ps1`: builds the release exe and copies it into a folder.
 - `docs/WIN10-NOTEPAD-SPEC.md`: the behavior spec, with the reverse-engineering
   evidence.
 - `re/`: the script that drove REA.
@@ -250,6 +251,12 @@ pwsh tests/ui/installer.ps1 # install, reinstall, uninstall (only if not install
 
 <!-- Newest on top. Format: `YYYY-MM-DD — version: what changed`. -->
 
+- 2026-11-06 — 0.5.0:
+  - *Settings › Theme*: Light, Dark, One Dark and Nord.
+  - Open files reload by themselves when another program changes them, unless
+    the tab has unsaved edits. A caret at the end follows a growing log.
+  - Fixed a crash when typing reached the right edge of the window, most often
+    with a space.
 - 2026-10-13 — 0.4.0:
   - Brings over the files pinned to Notepad's taskbar jump list: offered by the
     installer, and *Settings › Import pinned files from Notepad*. Pins to files
