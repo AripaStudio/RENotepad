@@ -161,6 +161,9 @@ pub struct App {
     /// Scrollbars the active editor needs (vertical, horizontal); the rest are
     /// pushed under the window edge / status bar, as Windows 11 shows none at rest.
     bars: (bool, bool),
+    /// fit_scrollbars is running: the resize and re-scroll it does notify
+    /// back into it, and a nested pass would measure before the re-scroll.
+    fitting_bars: bool,
     shown_title: String,
     hook: HWINEVENTHOOK,
     pub accel: HACCEL,
@@ -211,6 +214,7 @@ pub fn create(cmd_show: i32, args: &text::Args) -> Option<()> {
             window_active: true,
             tracking_mouse: false,
             bars: (true, true),
+            fitting_bars: false,
             shown_title: String::new(),
             hook: std::ptr::null_mut(),
             accel: accelerators(false),
@@ -507,16 +511,21 @@ impl App {
     /// Show only the scrollbars there is something to scroll for. Showing one
     /// narrows the text, which can only add lines, so this settles in a pass or two.
     fn fit_scrollbars(&mut self) {
+        if self.fitting_bars {
+            return;
+        }
+        self.fitting_bars = true;
         for _ in 0..3 {
             let need = self.scrollbar_need();
             if need == self.bars {
-                return;
+                break;
             }
             self.bars = need;
             self.layout();
             // Resizing re-insets the text without re-scrolling; keep the caret in view.
             unsafe { SendMessageW(self.edit(), EM_SCROLLCARET, 0, 0) };
         }
+        self.fitting_bars = false;
     }
 
     /// Inset the text like Windows 11 Notepad. The control resets this rect on
