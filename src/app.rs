@@ -8,6 +8,7 @@ use crate::encoding::{self, Encoding};
 use crate::settings::Settings;
 use crate::status::{self, Status};
 use crate::theme::{self, Theme};
+use crate::undo::History;
 use crate::{filedlg, jumplist, muldiv, print, syntax, text, update, wide};
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
@@ -67,6 +68,7 @@ const IDM_CHECK_UPDATES: u16 = 49;
 const IDM_AUTO_UPDATES: u16 = 50;
 const IDM_IMPORT_PINS: u16 = 51;
 const IDM_PIN: u16 = 52;
+const IDM_REDO: u16 = 53;
 
 const EDIT_ID: usize = 15;
 /// Editor text inset at 96 DPI (Windows 11 Notepad: 16 px left and top).
@@ -112,6 +114,7 @@ struct Doc {
     zoom: i32,
     /// The file's (modified time, size) when last loaded or saved.
     stamp: Option<(std::time::SystemTime, u64)>,
+    history: History,
 }
 
 /// Menu-bar keyboard/mouse navigation while a popup is open. Written by the
@@ -311,6 +314,9 @@ fn accelerators(global: bool) -> HACCEL {
             (cs, VK_TAB, IDM_PREV_TAB),
             (c, VK_NEXT, IDM_NEXT_TAB),
             (c, VK_PRIOR, IDM_PREV_TAB),
+            (c, b'Z' as u16, IDM_UNDO),
+            (c, b'Y' as u16, IDM_REDO),
+            (cs, b'Z' as u16, IDM_REDO),
             (c, b'F' as u16, IDM_FIND),
             (c, b'H' as u16, IDM_REPLACE),
             (c, b'G' as u16, IDM_GOTO),
@@ -358,6 +364,7 @@ fn build_menus() -> [HMENU; MENU_COUNT] {
 
         let edit = CreatePopupMenu();
         add(edit, IDM_UNDO, "&Undo\tCtrl+Z");
+        add(edit, IDM_REDO, "&Redo\tCtrl+Y");
         sep(edit);
         add(edit, IDM_CUT, "Cu&t\tCtrl+X");
         add(edit, IDM_COPY, "&Copy\tCtrl+C");
@@ -731,6 +738,29 @@ impl App {
         (s as usize, e as usize)
     }
 
+    fn record_edit(&mut self, i: usize) {
+        let e = self.docs[i].edit;
+        let (mut s, mut end) = (0u32, 0u32);
+        unsafe { SendMessageW(e, EM_GETSEL, &mut s as *mut u32 as usize, &mut end as *mut u32 as isize) };
+        self.docs[i].history.record(get_edit_text(e), end as usize);
+    }
+
+    /// The history already holds the result, so the EN_CHANGE this causes records nothing.
+    fn undo(&mut self, redo: bool) {
+        let h = &mut self.doc_mut().history;
+        let Some(c) = (if redo { h.redo() } else { h.undo() }) else { return };
+        let e = self.edit();
+        unsafe {
+            SendMessageW(e, EM_SETSEL, c.start, c.end as isize);
+            self.replace_sel(&c.text);
+            SendMessageW(e, EM_SETSEL, c.sel.0, c.sel.1 as isize);
+            SendMessageW(e, EM_SCROLLCARET, 0, 0);
+            SendMessageW(e, EM_SETMODIFY, !self.doc().history.is_saved() as usize, 0);
+        }
+        self.update_title();
+        self.invalidate_chrome();
+    }
+
     fn replace_sel(&self, text: &[u16]) {
         let mut t = text.to_vec();
         t.push(0);
@@ -741,7 +771,7 @@ impl App {
 
     fn new_tab(&mut self) {
         let edit = self.make_edit(&[], (0, 0), false, 100);
-        self.docs.push(Doc { edit, path: None, encoding: Encoding::Utf8, zoom: 100, stamp: None });
+        self.docs.push(Doc { edit, path: None, encoding: Encoding::Utf8, zoom: 100, stamp: None, history: History::new(Vec::new()) });
         self.switch_to(self.docs.len() - 1);
     }
 
@@ -894,7 +924,6 @@ impl App {
             SendMessageW(e, WM_SETREDRAW, 0, 0);
             set_edit_text(e, &content);
             SendMessageW(e, EM_SETENDOFLINE, EC_ENDOFLINE_DETECTFROMCONTENT, 0);
-            SendMessageW(e, EM_EMPTYUNDOBUFFER, 0, 0);
             SendMessageW(e, EM_SETMODIFY, 0, 0);
             SendMessageW(e, EM_SETSEL, 0, 0);
             SendMessageW(e, EM_SCROLLCARET, 0, 0);
@@ -905,6 +934,7 @@ impl App {
         d.path = Some(path.to_string());
         d.encoding = enc;
         d.stamp = file_stamp(path);
+        d.history = History::new(content.clone());
         if text::is_log_file(&content) {
             let end = content.len();
             unsafe {
@@ -936,6 +966,7 @@ impl App {
             let Ok(bytes) = std::fs::read(&path) else { continue };
             self.docs[i].stamp = Some(stamp);
             let content = encoding::decode(&bytes, self.docs[i].encoding);
+            self.docs[i].history = History::new(content.clone());
             let e = self.docs[i].edit;
             unsafe {
                 let (mut s, mut end) = (0u32, 0u32);
@@ -984,6 +1015,7 @@ impl App {
         d.path = Some(path.to_string());
         d.encoding = enc;
         d.stamp = file_stamp(path);
+        d.history.mark_saved();
         unsafe { SendMessageW(self.edit(), EM_SETMODIFY, 0, 0) };
         self.update_title();
         self.invalidate_chrome();
@@ -1360,7 +1392,8 @@ impl App {
             let ck = |id: u16, on: bool| {
                 CheckMenuItem(menu, id as u32, MF_BYCOMMAND | if on { MF_CHECKED } else { MF_UNCHECKED });
             };
-            en(IDM_UNDO, SendMessageW(e, EM_CANUNDO, 0, 0) != 0);
+            en(IDM_UNDO, self.doc().history.can_undo());
+            en(IDM_REDO, self.doc().history.can_redo());
             en(IDM_CUT, has_sel);
             en(IDM_COPY, has_sel);
             en(IDM_DELETE, has_sel);
@@ -1411,9 +1444,8 @@ impl App {
                 }
                 IDM_NEXT_TAB => self.cycle_tab(true),
                 IDM_PREV_TAB => self.cycle_tab(false),
-                IDM_UNDO => {
-                    SendMessageW(e, WM_UNDO, 0, 0);
-                }
+                IDM_UNDO => self.undo(false),
+                IDM_REDO => self.undo(true),
                 IDM_CUT => {
                     SendMessageW(e, WM_CUT, 0, 0);
                 }
@@ -1729,8 +1761,11 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         WM_COMMAND => {
             let id = (wparam & 0xFFFF) as u16;
             let code = (wparam >> 16) as u32;
-            if a.docs.iter().any(|d| d.edit == lparam as HWND) {
-                if lparam as HWND == a.edit() {
+            if let Some(i) = a.docs.iter().position(|d| d.edit == lparam as HWND) {
+                if code == EN_CHANGE {
+                    a.record_edit(i);
+                }
+                if i == a.cur {
                     if code == EN_CHANGE {
                         a.update_title();
                         a.update_status();
@@ -1862,10 +1897,17 @@ unsafe extern "system" fn caret_event(_: HWINEVENTHOOK, _: u32, hwnd: HWND, id_o
 
 unsafe extern "system" fn edit_subclass(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM, _: usize, _: usize) -> LRESULT {
     // The edit control types Ctrl+Backspace (0x7F) and unbound Ctrl+letters
-    // in as raw control characters. Ctrl+C/V/X/Z (0x03/0x16/0x18/0x1A) must
-    // get through: the control does copy/paste/cut/undo off those.
-    if msg == WM_CHAR && (wparam == 0x7F || (wparam < 0x20 && ![0x03, 0x08, 0x09, 0x0A, 0x0D, 0x16, 0x18, 0x1A].contains(&wparam))) {
+    // in as raw control characters. Ctrl+C/V/X (0x03/0x16/0x18) must get
+    // through: the control does copy/paste/cut off those. Ctrl+Z is ours.
+    if msg == WM_CHAR && (wparam == 0x7F || (wparam < 0x20 && ![0x03, 0x08, 0x09, 0x0A, 0x0D, 0x16, 0x18].contains(&wparam))) {
         return 0;
+    }
+    // Its right-click Undo, which would otherwise toggle its own one-step buffer.
+    if matches!(msg, WM_UNDO | EM_UNDO) {
+        if let Some(a) = try_app() {
+            a.undo(false);
+        }
+        return 1;
     }
     if msg == WM_KEYDOWN && wparam == VK_BACK as usize && GetKeyState(VK_CONTROL as i32) < 0 {
         delete_word_back(hwnd);

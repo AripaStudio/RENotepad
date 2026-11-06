@@ -131,7 +131,7 @@ It's the classic Notepad, minus the extras.
   - Opening a file that's already open switches to its tab.
 - **File:** New tab, New window, Open, Save, Save as (with an Encoding picker),
   Save all, Page setup, Print, Close tab, Close window.
-- **Edit:** Undo, Cut, Copy, Paste, Delete, Find, Find next/previous
+- **Edit:** Undo, Redo, Cut, Copy, Paste, Delete, Find, Find next/previous
   (F3 / Shift+F3), Replace, Go to, Select all, Time/Date (F5), Font.
 - **View:** Zoom (Ctrl+Plus / Ctrl+Minus / Ctrl+0 / Ctrl+wheel), Status bar,
   Word wrap.

@@ -15,6 +15,7 @@ mod status;
 mod syntax;
 mod text;
 mod theme;
+mod undo;
 mod update;
 
 use windows_sys::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
