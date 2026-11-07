@@ -158,6 +158,7 @@ pub struct App {
     font: HFONT,
     /// `font` at a zoom level, for drawing syntax colors: (zoom, font).
     syntax_font: (i32, HFONT),
+    syntax_cache: syntax::Cache,
     dpi: u32,
     pub settings: Settings,
     chrome: Chrome,
@@ -214,6 +215,7 @@ pub fn create(cmd_show: i32, args: &text::Args) -> Option<()> {
             find_is_replace: false,
             font: std::ptr::null_mut(),
             syntax_font: (0, std::ptr::null_mut()),
+            syntax_cache: syntax::Cache::default(),
             dpi: 96,
             settings,
             chrome: Chrome::new(96),
@@ -1222,25 +1224,58 @@ impl App {
     }
 
     /// Syntax colors over what `edit` just drew; `hdc` is null for the screen.
-    fn paint_syntax(&mut self, edit: HWND, hdc: HDC) {
+    /// The language and zoom of an editor that gets syntax colors.
+    fn syntax_lang(&self, edit: HWND) -> Option<(syntax::Lang, i32)> {
         if !self.settings.syntax {
-            return;
+            return None;
         }
-        let Some(d) = self.docs.iter().find(|d| d.edit == edit) else { return };
-        let Some(lang) = d.path.as_deref().and_then(syntax::Lang::from_path) else { return };
-        let font = self.zoomed_font(d.zoom);
+        let d = self.docs.iter().find(|d| d.edit == edit)?;
+        Some((d.path.as_deref().and_then(syntax::Lang::from_path)?, d.zoom))
+    }
+
+    fn paint_syntax(&mut self, edit: HWND, hdc: HDC) {
+        let Some((lang, zoom)) = self.syntax_lang(edit) else { return };
+        let font = self.zoomed_font(zoom);
         unsafe {
             if !hdc.is_null() {
-                syntax::paint(edit, hdc, lang, font);
+                syntax::paint(edit, hdc, lang, font, &mut self.syntax_cache);
                 return;
             }
             if IsWindowVisible(edit) == 0 {
                 return;
             }
             let dc = GetDC(edit);
-            syntax::paint(edit, dc, lang, font);
+            syntax::paint(edit, dc, lang, font, &mut self.syntax_cache);
             ReleaseDC(edit, dc);
         }
+    }
+
+    /// Colored editors paint off-screen: drawn straight to the window, the
+    /// plain text showed for a frame before the colors went over it.
+    fn paint_buffered(&mut self, edit: HWND) -> bool {
+        if self.syntax_lang(edit).is_none() {
+            return false;
+        }
+        unsafe {
+            let mut ps: PAINTSTRUCT = std::mem::zeroed();
+            let hdc = BeginPaint(edit, &mut ps);
+            let mut rc: RECT = std::mem::zeroed();
+            GetClientRect(edit, &mut rc);
+            let mem = CreateCompatibleDC(hdc);
+            let bmp = CreateCompatibleBitmap(hdc, rc.right, rc.bottom);
+            let old = SelectObject(mem, bmp);
+            let bg = CreateSolidBrush(theme::edit_bg());
+            FillRect(mem, &rc, bg);
+            DeleteObject(bg);
+            // Comes back through edit_subclass, which adds the colors.
+            SendMessageW(edit, WM_PRINTCLIENT, mem as usize, PRF_CLIENT as isize);
+            BitBlt(hdc, 0, 0, rc.right, rc.bottom, mem, 0, 0, SRCCOPY);
+            SelectObject(mem, old);
+            DeleteObject(bmp);
+            DeleteDC(mem);
+            EndPaint(edit, &ps);
+        }
+        true
     }
 
     /// The control scales its own font when zoomed; the colors must be drawn with the same size.
@@ -1916,7 +1951,25 @@ unsafe extern "system" fn edit_subclass(hwnd: HWND, msg: u32, wparam: WPARAM, lp
         }
         return 0;
     }
+    if msg == WM_PAINT && try_app().is_some_and(|a| a.paint_buffered(hwnd)) {
+        return 0;
+    }
+    let colored = try_app().is_some_and(|a| a.syntax_lang(hwnd).is_some());
+    // paint_buffered fills the background itself; erasing first blanks the screen.
+    if msg == WM_ERASEBKGND && colored {
+        return 1;
+    }
+    // Scrolling draws the lines it brings in straight to the screen, plain,
+    // with the colors a frame behind. Hold its drawing and repaint buffered.
+    let held = colored && matches!(msg, WM_MOUSEWHEEL | WM_VSCROLL | WM_HSCROLL);
+    if held {
+        SendMessageW(hwnd, WM_SETREDRAW, 0, 0);
+    }
     let r = DefSubclassProc(hwnd, msg, wparam, lparam);
+    if held {
+        SendMessageW(hwnd, WM_SETREDRAW, 1, 0);
+        RedrawWindow(hwnd, std::ptr::null(), std::ptr::null_mut(), RDW_INVALIDATE | RDW_UPDATENOW | RDW_FRAME);
+    }
     if msg == WM_MOUSEWHEEL && (wparam & 0x0008) != 0 {
         // MK_CONTROL: the control just zoomed itself.
         if let Some(a) = try_app() {
@@ -1932,7 +1985,7 @@ unsafe extern "system" fn edit_subclass(hwnd: HWND, msg: u32, wparam: WPARAM, lp
         WM_MOUSEMOVE => wparam & 0x0001 != 0, // MK_LBUTTON: dragging a selection
         _ => false,
     };
-    if repaints {
+    if repaints && !held {
         if let Some(a) = try_app() {
             a.paint_syntax(hwnd, if msg == WM_PRINTCLIENT { wparam as HDC } else { std::ptr::null_mut() });
         }

@@ -8,9 +8,18 @@ use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::UI::Controls::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-/// Every paint lexes from the top (block comments can open anywhere above),
+/// Every edit lexes the whole text (block comments can open anywhere above),
 /// so bigger files show plain.
 const MAX_CHARS: i32 = 1 << 20;
+
+/// The text last painted and all of its runs. Scrolling repaints on every
+/// wheel notch; lexing again only when the text changed keeps that smooth.
+#[derive(Default)]
+pub struct Cache {
+    lang: Option<Lang>,
+    text: Vec<u16>,
+    spans: Vec<(usize, usize, Kind)>,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Lang {
@@ -434,7 +443,7 @@ unsafe fn pos_from_char(edit: HWND, i: usize) -> Option<(i32, i32)> {
 
 /// Draw the colored runs of the visible lines over what the control painted.
 /// `font` must be the font the control draws with at its current zoom.
-pub unsafe fn paint(edit: HWND, hdc: HDC, lang: Lang, font: HFONT) {
+pub unsafe fn paint(edit: HWND, hdc: HDC, lang: Lang, font: HFONT, cache: &mut Cache) {
     let len = GetWindowTextLengthW(edit);
     if len == 0 || len > MAX_CHARS {
         return;
@@ -442,6 +451,12 @@ pub unsafe fn paint(edit: HWND, hdc: HDC, lang: Lang, font: HFONT) {
     let mut text = vec![0u16; len as usize + 1];
     let got = GetWindowTextW(edit, text.as_mut_ptr(), len + 1);
     text.truncate(got.max(0) as usize);
+    if cache.lang != Some(lang) || cache.text != text {
+        cache.spans = spans(lang, &text, (0, text.len()));
+        cache.lang = Some(lang);
+        cache.text = text;
+    }
+    let text = &cache.text;
 
     let mut rc: RECT = std::mem::zeroed();
     SendMessageW(edit, EM_GETRECT, 0, &mut rc as *mut RECT as isize);
@@ -461,7 +476,8 @@ pub unsafe fn paint(edit: HWND, hdc: HDC, lang: Lang, font: HFONT) {
         lines.push((start, (start + n).min(text.len())));
     }
     let (Some(&(top, _)), Some(&(_, bottom))) = (lines.first(), lines.last()) else { return };
-    let spans = spans(lang, &text, (top, bottom));
+    // Runs are in order and don't overlap, so their ends are sorted too.
+    let spans = &cache.spans[cache.spans.partition_point(|sp| sp.1 <= top)..cache.spans.partition_point(|sp| sp.0 < bottom)];
     if spans.is_empty() {
         return;
     }
@@ -486,7 +502,7 @@ pub unsafe fn paint(edit: HWND, hdc: HDC, lang: Lang, font: HFONT) {
             let pieces: &[(usize, usize)] = if sel.0 < sel.1 { &pieces } else { &[(s, e)] };
             SetTextColor(hdc, colors.color(kind));
             for &(a, b) in pieces {
-                draw_run(edit, hdc, &text, a, b, tm.tmHeight);
+                draw_run(edit, hdc, text, a, b, tm.tmHeight);
             }
         }
     }
