@@ -2,7 +2,7 @@
 //! color, so it paints the text as usual and the colored runs are drawn again
 //! on top, at the positions the control reports for each character.
 
-use crate::theme;
+use crate::{muldiv, theme};
 use windows_sys::Win32::Foundation::{HWND, RECT, SIZE};
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::UI::Controls::*;
@@ -441,6 +441,74 @@ unsafe fn pos_from_char(edit: HWND, i: usize) -> Option<(i32, i32)> {
     (r != -1).then_some(((r & 0xFFFF) as i16 as i32, ((r >> 16) & 0xFFFF) as i16 as i32))
 }
 
+/// The control's text and, when `lang` is set, its runs, lexed again only when it changed.
+unsafe fn refresh(edit: HWND, lang: Option<Lang>, cache: &mut Cache) {
+    let len = GetWindowTextLengthW(edit);
+    let mut text = vec![0u16; len as usize + 1];
+    let got = GetWindowTextW(edit, text.as_mut_ptr(), len + 1);
+    text.truncate(got.max(0) as usize);
+    if cache.lang != lang || cache.text != text {
+        cache.spans = lang.map_or_else(Vec::new, |lang| spans(lang, &text, (0, text.len())));
+        cache.lang = lang;
+        cache.text = text;
+    }
+}
+
+/// The visible lines drawn whole at zoom `to` while the control still has
+/// them laid out at `from`, with `font` at `to`: a crisp stand-in until it
+/// re-lays them out. Tabs use the control's default stops (8 average
+/// characters); a wrapped line keeps its old break until then.
+pub unsafe fn paint_zoomed(edit: HWND, hdc: HDC, bottom: i32, lang: Option<Lang>, font: HFONT, (from, to): (i32, i32), cache: &mut Cache) {
+    refresh(edit, lang.filter(|_| GetWindowTextLengthW(edit) <= MAX_CHARS), cache);
+    let (text, spans) = (&cache.text, &cache.spans);
+    let mut rc: RECT = std::mem::zeroed();
+    SendMessageW(edit, EM_GETRECT, 0, &mut rc as *mut RECT as isize);
+    let first = SendMessageW(edit, EM_GETFIRSTVISIBLELINE, 0, 0) as usize;
+    // Scrolled sideways: the hidden width scales with the text.
+    let start = SendMessageW(edit, EM_LINEINDEX, first, 0).max(0) as usize;
+    let x = pos_from_char(edit, start).map_or(rc.left, |(x, _)| rc.left - muldiv(rc.left - x, to, from));
+
+    let saved = SaveDC(hdc);
+    IntersectClipRect(hdc, rc.left, rc.top, rc.right, bottom);
+    SelectObject(hdc, font);
+    SetBkMode(hdc, TRANSPARENT as i32);
+    let mut tm: TEXTMETRICW = std::mem::zeroed();
+    GetTextMetricsW(hdc, &mut tm);
+    let colors = theme::syntax();
+    let draw = |ls: usize, a: usize, b: usize, y: i32, color| {
+        if a >= b {
+            return;
+        }
+        let dx = if a > ls { (GetTabbedTextExtentW(hdc, text[ls..].as_ptr(), (a - ls) as i32, 0, std::ptr::null()) & 0xFFFF) as i32 } else { 0 };
+        SetTextColor(hdc, color);
+        TabbedTextOutW(hdc, x + dx, y, text[a..].as_ptr(), (b - a) as i32, 0, std::ptr::null(), x);
+    };
+    let mut y = rc.top;
+    for line in first.. {
+        if y >= bottom {
+            break;
+        }
+        let ls = SendMessageW(edit, EM_LINEINDEX, line, 0);
+        if ls < 0 {
+            break;
+        }
+        let ls = ls as usize;
+        let le = (ls + SendMessageW(edit, EM_LINELENGTH, ls, 0) as usize).min(text.len());
+        // Plain stretches and runs side by side: drawing one over the other
+        // would blend their antialiased edges.
+        let mut p = ls;
+        for &(s, e, kind) in spans[spans.partition_point(|sp| sp.1 <= ls)..].iter().take_while(|sp| sp.0 < le) {
+            let (s, e) = (s.max(ls), e.min(le));
+            draw(ls, p, s, y, theme::edit_fg());
+            draw(ls, s, e, y, colors.color(kind));
+            p = e;
+        }
+        draw(ls, p, le, y, theme::edit_fg());
+        y += tm.tmHeight;
+    }
+    RestoreDC(hdc, saved);
+}
+
 /// Draw the colored runs of the visible lines over what the control painted.
 /// `font` must be the font the control draws with at its current zoom.
 pub unsafe fn paint(edit: HWND, hdc: HDC, lang: Lang, font: HFONT, cache: &mut Cache) {
@@ -448,14 +516,7 @@ pub unsafe fn paint(edit: HWND, hdc: HDC, lang: Lang, font: HFONT, cache: &mut C
     if len == 0 || len > MAX_CHARS {
         return;
     }
-    let mut text = vec![0u16; len as usize + 1];
-    let got = GetWindowTextW(edit, text.as_mut_ptr(), len + 1);
-    text.truncate(got.max(0) as usize);
-    if cache.lang != Some(lang) || cache.text != text {
-        cache.spans = spans(lang, &text, (0, text.len()));
-        cache.lang = Some(lang);
-        cache.text = text;
-    }
+    refresh(edit, Some(lang), cache);
     let text = &cache.text;
 
     let mut rc: RECT = std::mem::zeroed();
@@ -469,13 +530,14 @@ pub unsafe fn paint(edit: HWND, hdc: HDC, lang: Lang, font: HFONT, cache: &mut C
             break;
         }
         let start = start as usize;
-        if pos_from_char(edit, start).is_some_and(|(_, y)| y >= rc.bottom) {
+        let pos = pos_from_char(edit, start);
+        if pos.is_some_and(|(_, y)| y >= rc.bottom) {
             break;
         }
         let n = SendMessageW(edit, EM_LINELENGTH, start, 0) as usize;
-        lines.push((start, (start + n).min(text.len())));
+        lines.push((start, (start + n).min(text.len()), pos));
     }
-    let (Some(&(top, _)), Some(&(_, bottom))) = (lines.first(), lines.last()) else { return };
+    let (Some(&(top, _, _)), Some(&(_, bottom, _))) = (lines.first(), lines.last()) else { return };
     // Runs are in order and don't overlap, so their ends are sorted too.
     let spans = &cache.spans[cache.spans.partition_point(|sp| sp.1 <= top)..cache.spans.partition_point(|sp| sp.0 < bottom)];
     if spans.is_empty() {
@@ -494,7 +556,8 @@ pub unsafe fn paint(edit: HWND, hdc: HDC, lang: Lang, font: HFONT, cache: &mut C
     let mut tm: TEXTMETRICW = std::mem::zeroed();
     GetTextMetricsW(hdc, &mut tm);
     let colors = theme::syntax();
-    for &(ls, le) in &lines {
+    for &(ls, le, pos) in &lines {
+        let mut anchor = pos.map(|(x, y)| (ls, x, y));
         for &(s, e, kind) in spans.iter().filter(|sp| sp.1 > ls && sp.0 < le) {
             let (s, e) = (s.max(ls), e.min(le));
             // Selected text keeps the control's highlight.
@@ -502,7 +565,7 @@ pub unsafe fn paint(edit: HWND, hdc: HDC, lang: Lang, font: HFONT, cache: &mut C
             let pieces: &[(usize, usize)] = if sel.0 < sel.1 { &pieces } else { &[(s, e)] };
             SetTextColor(hdc, colors.color(kind));
             for &(a, b) in pieces {
-                draw_run(edit, hdc, text, a, b, tm.tmHeight);
+                draw_run(edit, hdc, text, a, b, tm.tmHeight, &mut anchor);
             }
         }
     }
@@ -510,8 +573,11 @@ pub unsafe fn paint(edit: HWND, hdc: HDC, lang: Lang, font: HFONT, cache: &mut C
     ShowCaret(edit);
 }
 
-/// One run, split at tabs so the tab stops stay the control's.
-unsafe fn draw_run(edit: HWND, hdc: HDC, text: &[u16], a: usize, b: usize, height: i32) {
+/// One run, split at tabs so the tab stops stay the control's. Asking the
+/// control where a character is re-measures its line (most of a repaint), so
+/// it is measured on from `anchor`, a known (char, x, y) on the line, up to
+/// the next tab.
+unsafe fn draw_run(edit: HWND, hdc: HDC, text: &[u16], a: usize, b: usize, height: i32, anchor: &mut Option<(usize, i32, i32)>) {
     let mut p = a;
     while p < b {
         if text[p] == b'\t' as u16 {
@@ -519,12 +585,21 @@ unsafe fn draw_run(edit: HWND, hdc: HDC, text: &[u16], a: usize, b: usize, heigh
             continue;
         }
         let q = (p..b).find(|&j| text[j] == b'\t' as u16).unwrap_or(b);
-        if let Some((x, y)) = pos_from_char(edit, p) {
+        let pos = match *anchor {
+            Some((i, x, y)) if i <= p && !text[i..p].contains(&(b'\t' as u16)) => {
+                let mut gap: SIZE = std::mem::zeroed();
+                GetTextExtentPoint32W(hdc, text[i..].as_ptr(), (p - i) as i32, &mut gap);
+                Some((x + gap.cx, y))
+            }
+            _ => pos_from_char(edit, p),
+        };
+        if let Some((x, y)) = pos {
             let run = &text[p..q];
             let mut size: SIZE = std::mem::zeroed();
             GetTextExtentPoint32W(hdc, run.as_ptr(), run.len() as i32, &mut size);
             let r = RECT { left: x, top: y, right: x + size.cx, bottom: y + height };
             ExtTextOutW(hdc, x, y, ETO_OPAQUE | ETO_CLIPPED, &r, run.as_ptr(), run.len() as u32, std::ptr::null());
+            *anchor = Some((q, x + size.cx, y));
         }
         p = q;
     }

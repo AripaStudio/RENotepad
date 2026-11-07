@@ -10,7 +10,7 @@ use windows_sys::Win32::Foundation::{COLORREF, HWND, LPARAM, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
 use windows_sys::Win32::Graphics::Gdi::{
     CreateFontIndirectW, CreateSolidBrush, EnumFontFamiliesExW, FillRect, GetDC, GetStockObject, GetSysColor, ReleaseDC,
-    SetBkColor, SetDCBrushColor, SetPixelV, SetTextColor, CLEARTYPE_QUALITY, COLOR_WINDOW, DC_BRUSH, DEFAULT_CHARSET, HBRUSH,
+    SetBkColor, SetDCBrushColor, SetPixelV, SetTextColor, CLEARTYPE_QUALITY, COLOR_WINDOW, COLOR_WINDOWTEXT, DC_BRUSH, DEFAULT_CHARSET, HBRUSH,
     HDC, HFONT, LOGFONTW, TEXTMETRICW,
 };
 use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_SYSTEM32};
@@ -305,6 +305,11 @@ pub fn syntax() -> &'static Syntax {
 /// The editor's background, whether ours (dark themes) or the stock window color.
 pub fn edit_bg() -> COLORREF {
     controls().map_or_else(|| unsafe { GetSysColor(COLOR_WINDOW) }, |c| c.edit_bg)
+}
+
+/// The editor's text color, like edit_bg.
+pub fn edit_fg() -> COLORREF {
+    controls().map_or_else(|| unsafe { GetSysColor(COLOR_WINDOWTEXT) }, |c| c.edit_fg)
 }
 
 /// None in light mode, where controls keep their stock colors.

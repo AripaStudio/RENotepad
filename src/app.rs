@@ -20,7 +20,7 @@ use windows_sys::Win32::UI::Controls::*;
 use windows_sys::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, GetCapture, GetKeyState, ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT,
-    VK_BACK, VK_CONTROL, VK_DOWN, VK_LEFT, VK_RIGHT,
+    VK_BACK, VK_CONTROL, VK_DOWN, VK_LEFT, VK_RIGHT, VK_SHIFT,
 };
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, DragAcceptFiles, DragFinish, DragQueryFileW, SHAddToRecentDocs, SetWindowSubclass, HDROP, SHARD_PATHW};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
@@ -82,7 +82,6 @@ const EM_GETCARETINDEX: u32 = 0x1512;
 const EM_FILELINEFROMCHAR: u32 = 0x1513;
 const EM_FILELINEINDEX: u32 = 0x1514;
 const EM_GETFILELINECOUNT: u32 = 0x1517;
-const EM_GETZOOM: u32 = 0x04E0;
 const EM_SETZOOM: u32 = 0x04E1;
 const ES_EX_ALLOWEOL_ALL: usize = 0x3;
 const ES_EX_CONVERT_EOL_ON_PASTE: usize = 0x4;
@@ -95,6 +94,9 @@ const MAX_FILE: u64 = 1 << 30;
 /// How often open files are checked for changes made by other programs.
 const WATCH_TIMER: usize = 1;
 const WATCH_MS: u32 = 1000;
+const ZOOM_TIMER: usize = 2;
+/// Ctrl+wheel quiet this long before the real zoom (a full re-layout) runs.
+const ZOOM_SETTLE_MS: u32 = 150;
 
 // Find / Replace dialog control ids.
 const IDC_FIND_TEXT: u16 = 1152;
@@ -171,6 +173,10 @@ pub struct App {
     /// fit_scrollbars is running: the resize and re-scroll it does notify
     /// back into it, and a nested pass would measure before the re-scroll.
     fitting_bars: bool,
+    /// Ctrl+wheel delta short of a full notch (high-resolution wheels, touchpads).
+    zoom_wheel: i32,
+    /// Ctrl+wheel in progress: the zoom the text is drawn at until it settles.
+    zoom_preview: Option<i32>,
     shown_title: String,
     hook: HWINEVENTHOOK,
     pub accel: HACCEL,
@@ -224,6 +230,8 @@ pub fn create(cmd_show: i32, args: &text::Args) -> Option<()> {
             tracking_mouse: false,
             bars: (true, true),
             fitting_bars: false,
+            zoom_wheel: 0,
+            zoom_preview: None,
             shown_title: String::new(),
             hook: std::ptr::null_mut(),
             accel: accelerators(false),
@@ -658,7 +666,7 @@ impl App {
         };
         self.status.set(status::POS, &format!("Ln {ln}, Col {col}"));
         self.status.set(status::CHARS, &chars);
-        self.status.set(status::ZOOM, &format!("{}%", self.doc().zoom));
+        self.status.set(status::ZOOM, &format!("{}%", self.zoom_preview.unwrap_or(self.doc().zoom)));
         self.status.set(status::EOL, eol);
         self.status.set(status::ENCODING, self.doc().encoding.label());
     }
@@ -781,6 +789,7 @@ impl App {
         if i >= self.docs.len() {
             return;
         }
+        self.commit_zoom();
         self.cur = i;
         unsafe {
             for (k, d) in self.docs.iter().enumerate() {
@@ -811,6 +820,7 @@ impl App {
         if i >= self.docs.len() {
             return true;
         }
+        self.commit_zoom();
         if self.doc_modified(i) {
             self.switch_to(i);
             if !self.check_save() {
@@ -1213,14 +1223,37 @@ impl App {
         self.update_status();
     }
 
-    /// The control zooms itself on Ctrl+wheel; read back what it chose.
-    fn sync_zoom(&mut self) {
-        let (mut num, mut den) = (0i32, 0i32);
-        unsafe { SendMessageW(self.edit(), EM_GETZOOM, &mut num as *mut i32 as usize, &mut den as *mut i32 as isize) };
-        self.doc_mut().zoom = if num > 0 && den > 0 { (num * 100 + den / 2) / den } else { 100 };
-        self.pad_edit(self.edit());
-        self.fit_scrollbars();
+    /// Ctrl+wheel, 10% a notch like the menu. A real zoom re-lays out the
+    /// whole text (~70 ms on a 60 KB file), far slower than the wheel, so
+    /// until it settles the app draws the visible lines at the new size.
+    fn wheel_zoom(&mut self, delta: i32) {
+        self.zoom_wheel += delta;
+        let notches = self.zoom_wheel / WHEEL_DELTA as i32;
+        if notches == 0 {
+            return;
+        }
+        self.zoom_wheel -= notches * WHEEL_DELTA as i32;
+        let edit = self.edit();
+        if self.zoom_preview.is_none() {
+            unsafe { HideCaret(edit) };
+        }
+        self.zoom_preview = Some((self.zoom_preview.unwrap_or(self.doc().zoom) + notches * 10).clamp(10, 500));
+        unsafe {
+            InvalidateRect(edit, std::ptr::null(), 0);
+            SetTimer(self.hwnd, ZOOM_TIMER, ZOOM_SETTLE_MS, None);
+        }
         self.update_status();
+    }
+
+    /// Apply a Ctrl+wheel zoom still being previewed; before anything that
+    /// would draw, edit or scroll the real text.
+    fn commit_zoom(&mut self) {
+        let Some(zoom) = self.zoom_preview.take() else { return };
+        unsafe {
+            KillTimer(self.hwnd, ZOOM_TIMER);
+            ShowCaret(self.edit());
+        }
+        self.set_zoom(zoom);
     }
 
     /// Syntax colors over what `edit` just drew; `hdc` is null for the screen.
@@ -1253,7 +1286,8 @@ impl App {
     /// Colored editors paint off-screen: drawn straight to the window, the
     /// plain text showed for a frame before the colors went over it.
     fn paint_buffered(&mut self, edit: HWND) -> bool {
-        if self.syntax_lang(edit).is_none() {
+        let preview = self.zoom_preview.filter(|_| edit == self.edit());
+        if preview.is_none() && self.syntax_lang(edit).is_none() {
             return false;
         }
         unsafe {
@@ -1267,8 +1301,17 @@ impl App {
             let bg = CreateSolidBrush(theme::edit_bg());
             FillRect(mem, &rc, bg);
             DeleteObject(bg);
-            // Comes back through edit_subclass, which adds the colors.
-            SendMessageW(edit, WM_PRINTCLIENT, mem as usize, PRF_CLIENT as isize);
+            match preview {
+                Some(zoom) => {
+                    let lang = self.syntax_lang(edit).map(|(lang, _)| lang);
+                    let font = self.zoomed_font(zoom);
+                    syntax::paint_zoomed(edit, mem, rc.bottom, lang, font, (self.doc().zoom, zoom), &mut self.syntax_cache);
+                }
+                // Comes back through edit_subclass, which adds the colors.
+                None => {
+                    SendMessageW(edit, WM_PRINTCLIENT, mem as usize, PRF_CLIENT as isize);
+                }
+            }
             BitBlt(hdc, 0, 0, rc.right, rc.bottom, mem, 0, 0, SRCCOPY);
             SelectObject(mem, old);
             DeleteObject(bmp);
@@ -1448,6 +1491,7 @@ impl App {
     }
 
     fn command(&mut self, id: u16) {
+        self.commit_zoom();
         let e = self.edit();
         unsafe {
             match id {
@@ -1818,6 +1862,10 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             a.reload_changed();
             0
         }
+        WM_TIMER if wparam == ZOOM_TIMER => {
+            a.commit_zoom();
+            0
+        }
         WM_INITMENUPOPUP => {
             a.init_menu(wparam as HMENU);
             0
@@ -1931,6 +1979,20 @@ unsafe extern "system" fn caret_event(_: HWINEVENTHOOK, _: u32, hwnd: HWND, id_o
 }
 
 unsafe extern "system" fn edit_subclass(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM, _: usize, _: usize) -> LRESULT {
+    // A zoom preview is a picture of the text: the real zoom goes on before
+    // anything acts on the text itself. Held modifiers auto-repeat mid-zoom.
+    let acts = match msg {
+        WM_KEYDOWN => !matches!(wparam as u16, VK_CONTROL | VK_SHIFT),
+        WM_MOUSEWHEEL => wparam & 0x0008 == 0,
+        WM_CHAR | WM_PASTE | WM_CUT | WM_CLEAR | WM_UNDO | EM_UNDO | EM_REPLACESEL | WM_SETTEXT | WM_VSCROLL | WM_HSCROLL
+        | WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_LBUTTONDBLCLK => true,
+        _ => false,
+    };
+    if acts {
+        if let Some(a) = try_app() {
+            a.commit_zoom();
+        }
+    }
     // The edit control types Ctrl+Backspace (0x7F) and unbound Ctrl+letters
     // in as raw control characters. Ctrl+C/V/X (0x03/0x16/0x18) must get
     // through: the control does copy/paste/cut off those. Ctrl+Z is ours.
@@ -1956,8 +2018,15 @@ unsafe extern "system" fn edit_subclass(hwnd: HWND, msg: u32, wparam: WPARAM, lp
     }
     let colored = try_app().is_some_and(|a| a.syntax_lang(hwnd).is_some());
     // paint_buffered fills the background itself; erasing first blanks the screen.
-    if msg == WM_ERASEBKGND && colored {
+    if msg == WM_ERASEBKGND && (colored || try_app().is_some_and(|a| a.zoom_preview.is_some())) {
         return 1;
+    }
+    // MK_CONTROL: zoomed by the app, not the control (see wheel_zoom).
+    if msg == WM_MOUSEWHEEL && (wparam & 0x0008) != 0 {
+        if let Some(a) = try_app() {
+            a.wheel_zoom((wparam >> 16) as u16 as i16 as i32);
+        }
+        return 0;
     }
     // Scrolling draws the lines it brings in straight to the screen, plain,
     // with the colors a frame behind. Hold its drawing and repaint buffered.
@@ -1970,19 +2039,15 @@ unsafe extern "system" fn edit_subclass(hwnd: HWND, msg: u32, wparam: WPARAM, lp
         SendMessageW(hwnd, WM_SETREDRAW, 1, 0);
         RedrawWindow(hwnd, std::ptr::null(), std::ptr::null_mut(), RDW_INVALIDATE | RDW_UPDATENOW | RDW_FRAME);
     }
-    if msg == WM_MOUSEWHEEL && (wparam & 0x0008) != 0 {
-        // MK_CONTROL: the control just zoomed itself.
-        if let Some(a) = try_app() {
-            a.sync_zoom();
-        }
-    }
     // The control draws typing, selection and scrolling straight to the
     // screen (no WM_PAINT), so the colors go back on after each of those too.
     let repaints = match msg {
-        WM_PAINT | WM_PRINTCLIENT | WM_CHAR | WM_KEYDOWN | WM_PASTE | WM_CUT | WM_CLEAR | WM_UNDO | EM_UNDO | EM_REPLACESEL
+        WM_PAINT | WM_PRINTCLIENT | WM_CHAR | WM_PASTE | WM_CUT | WM_CLEAR | WM_UNDO | EM_UNDO | EM_REPLACESEL
         | EM_SETSEL | WM_SETTEXT | WM_VSCROLL | WM_HSCROLL | WM_MOUSEWHEEL | WM_TIMER | WM_LBUTTONDOWN | WM_LBUTTONUP
         | WM_LBUTTONDBLCLK => true,
         WM_MOUSEMOVE => wparam & 0x0001 != 0, // MK_LBUTTON: dragging a selection
+        // Held modifiers auto-repeat; repainting on each one flashed the lines.
+        WM_KEYDOWN => !matches!(wparam as u16, VK_CONTROL | VK_SHIFT),
         _ => false,
     };
     if repaints && !held {
