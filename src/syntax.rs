@@ -359,16 +359,28 @@ fn xml(t: &[u16], end: usize, out: &mut Vec<(usize, usize, Kind)>) {
     }
 }
 
+/// Colored the way mclo.gs does it: a line that opens with a timestamp, a
+/// bracket or a level starts an entry, and the lines under it (a stack trace)
+/// belong to it. Warnings and errors color their whole entry, other levels
+/// only the prefix.
 fn log(t: &[u16], end: usize, out: &mut Vec<(usize, usize, Kind)>) {
+    let mut level = None;
     let mut i = 0;
     while i < end {
         let e = line_end(t, i);
-        let first = skip_blanks(t, i);
-        if first > i && at(t, first, "at ") {
-            // A Java stack frame.
-            out.push((first, e, Kind::Muted));
-        } else {
-            log_line(t, i, e, out);
+        if let Some((kind, prefix)) = log_entry(t, i, e) {
+            level = kind;
+            match kind {
+                Some(k @ (Kind::Error | Kind::Warning)) => out.push((i, e, k)),
+                Some(k) => out.push((i, prefix, k)),
+                None => {}
+            }
+        } else if let Some(k @ (Kind::Error | Kind::Warning)) = level {
+            out.push((i, e, k));
+        } else if at(t, skip_blanks(t, i), "//") {
+            out.push((i, e, Kind::Muted));
+        } else if stack_line(t, i, e) {
+            out.push((i, e, Kind::Error));
         }
         i = e;
         while i < t.len() && is_eol(t[i]) {
@@ -377,56 +389,58 @@ fn log(t: &[u16], end: usize, out: &mut Vec<(usize, usize, Kind)>) {
     }
 }
 
-fn log_line(t: &[u16], from: usize, e: usize, out: &mut Vec<(usize, usize, Kind)>) {
+/// For a line that starts an entry, its level and where its prefix ends
+/// (past the level and a closing "]:").
+fn log_entry(t: &[u16], from: usize, e: usize) -> Option<(Option<Kind>, usize)> {
+    if from >= e {
+        return None;
+    }
+    let starts = t[from] == b'[' as u16 || is_digit(t[from]);
+    if !starts && !is_ident(t[from]) {
+        return None;
+    }
     let mut i = from;
-    if t.get(i) == Some(&(b'[' as u16)) {
-        i += 1;
-    }
-    if i < e && is_digit(t[i]) {
-        let stamp = |j: usize| {
-            let c = t[j];
-            is_digit(c)
-                || one_of(c, b"-:./,TZ+")
-                || c == b' ' as u16 && t.get(j + 1).is_some_and(|&n| is_digit(n))
-        };
-        let j = (i..e).find(|&j| !stamp(j)).unwrap_or(e);
-        let w = &t[i..j];
-        if w.len() >= 8 && w.iter().any(|&c| c == b':' as u16 || c == b'-' as u16) {
-            out.push((i, j, Kind::Number));
-            i = j;
-        }
-    }
     while i < e {
-        let c = t[i];
-        if c == b'"' as u16 {
-            let j = quoted(t, i, true).min(e);
-            out.push((i, j, Kind::String));
-            i = j;
-        } else if is_ident(c) {
-            let j = ident_end(t, i).min(e);
-            let w = &t[i..j];
-            let is = |list: &[&str]| list.iter().any(|k| word_is(w, k));
-            let kind = if is(&["ERROR", "FATAL", "SEVERE", "CRITICAL"]) {
-                Some(Kind::Error)
-            } else if is(&["WARN", "WARNING"]) {
-                Some(Kind::Warning)
-            } else if is(&["INFO", "NOTICE"]) {
-                Some(Kind::Keyword)
-            } else if is(&["DEBUG", "TRACE", "VERBOSE", "FINE"]) {
-                Some(Kind::Muted)
-            } else if ch(c).is_uppercase() && (ends_with(w, "Exception") || ends_with(w, "Error")) {
-                Some(Kind::Error)
-            } else {
-                None
-            };
-            if let Some(k) = kind {
-                out.push((i, j, k));
-            }
-            i = j;
-        } else {
+        if !is_ident(t[i]) {
             i += 1;
+            continue;
         }
+        let j = ident_end(t, i).min(e);
+        if let Some(k) = log_level(&t[i..j]) {
+            let p = (j..e).find(|&p| !one_of(t[p], b"]:")).unwrap_or(e);
+            return Some((Some(k), p));
+        }
+        // Without a timestamp or bracket, only a leading level starts an entry.
+        if !starts {
+            return None;
+        }
+        i = j;
     }
+    Some((None, from))
+}
+
+fn log_level(w: &[u16]) -> Option<Kind> {
+    let is = |list: &[&str]| list.iter().any(|k| word_is(w, k));
+    if is(&["ERROR", "FATAL", "SEVERE", "CRITICAL", "EMERGENCY"]) {
+        Some(Kind::Error)
+    } else if is(&["WARN", "WARNING"]) {
+        Some(Kind::Warning)
+    } else if is(&["INFO", "NOTICE", "DEBUG", "TRACE", "VERBOSE", "FINE"]) {
+        Some(Kind::Keyword)
+    } else {
+        None
+    }
+}
+
+/// A Java stack trace line: a frame, "Caused by:", "... 3 more" or the exception itself.
+fn stack_line(t: &[u16], from: usize, e: usize) -> bool {
+    let first = skip_blanks(t, from);
+    if (first > from && at(t, first, "at ")) || ["Caused by:", "Suppressed:", "... "].iter().any(|s| at(t, first, s)) {
+        return true;
+    }
+    let j = (first..e).find(|&j| !is_ident(t[j]) && !one_of(t[j], b".$")).unwrap_or(e);
+    let w = &t[first..j];
+    (j == e || t[j] == b':' as u16) && ["Exception", "Error", "Throwable"].iter().any(|s| ends_with(w, s))
 }
 
 fn ends_with(w: &[u16], s: &str) -> bool {
@@ -691,12 +705,16 @@ mod tests {
 
     #[test]
     fn log_levels() {
-        let v = lex(Lang::Log, "2026-11-06 12:00:01,123 ERROR boom \"x\"\n[main] WARN slow\njava.lang.IllegalStateException: no\n\tat a.B.c(B.java:1)");
-        assert!(has(&v, "2026-11-06 12:00:01,123", Kind::Number));
-        assert!(has(&v, "ERROR", Kind::Error));
-        assert!(has(&v, "\"x\"", Kind::String));
-        assert!(has(&v, "WARN", Kind::Warning));
-        assert!(has(&v, "IllegalStateException", Kind::Error));
-        assert!(has(&v, "at a.B.c(B.java:1)", Kind::Muted));
+        let v = lex(Lang::Log, "[12:00:01] [Server thread/INFO]: Done\n2026-11-06 12:00:01,123 ERROR boom\n\tat a.B.c(B.java:1)\n[main] WARN slow\nmore");
+        assert!(has(&v, "[12:00:01] [Server thread/INFO]:", Kind::Keyword));
+        assert!(has(&v, "2026-11-06 12:00:01,123 ERROR boom", Kind::Error));
+        assert!(has(&v, "\tat a.B.c(B.java:1)", Kind::Error));
+        assert!(has(&v, "[main] WARN slow", Kind::Warning));
+        assert!(has(&v, "more", Kind::Warning));
+        let v = lex(Lang::Log, "[12:00] [main/INFO]: Crash\n// Oops\njava.lang.IllegalStateException: no\n\tat a.B.c(B.java:1)\nplain");
+        assert!(has(&v, "// Oops", Kind::Muted));
+        assert!(has(&v, "java.lang.IllegalStateException: no", Kind::Error));
+        assert!(has(&v, "\tat a.B.c(B.java:1)", Kind::Error));
+        assert!(!v.iter().any(|(t, _)| t == "plain"));
     }
 }
