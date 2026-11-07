@@ -7,7 +7,7 @@ use windows_sys::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows_sys::Win32::Networking::WinHttp::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 
-pub const REPO: &str = "nikkoxgonzales/RENotepad";
+pub const REPO: &str = "Noamm9/RENotepad";
 /// Posted to the main window: wParam = 1 for a check the user asked for,
 /// lParam = Box<Outcome> to take back with `Box::from_raw`.
 pub const WM_UPDATE_RESULT: u32 = WM_APP + 1;
@@ -198,7 +198,7 @@ mod tests {
         let (tag, url) = latest("microsoft/terminal").expect("fetch");
         assert!(tag.starts_with('v'), "{tag}");
         assert!(url.starts_with("https://github.com/microsoft/terminal/releases/"), "{url}");
-        assert!(latest("nikkoxgonzales/this-repo-does-not-exist").is_err());
+        assert!(latest("Noamm9/this-repo-does-not-exist").is_err());
         // Our own releases: the tag must be a version the check can compare.
         let (tag, url) = latest(REPO).expect("fetch our latest release");
         assert!(tag.starts_with('v') && tag[1..].split('.').all(|p| p.parse::<u64>().is_ok()), "{tag}");

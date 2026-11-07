@@ -7,7 +7,7 @@
 **Windows 10's Notepad, reverse-engineered and rebuilt in Rust, wearing Windows 11's look.**
 Dark by default. No Copilot, no Bing, no sign-in, no telemetry. Just text.
 
-[**Download**](https://github.com/nikkoxgonzales/RENotepad/releases/latest) ·
+[**Download**](https://github.com/Noamm9/RENotepad/releases/latest) ·
 [The story](#the-story) ·
 [Make it your default](#make-it-your-default) ·
 [Build from source](#build-from-source)
@@ -66,7 +66,7 @@ The **RE** stands for **r**everse **e**ngineering. The app itself is called
 
 ## Download
 
-Get it from the [latest release](https://github.com/nikkoxgonzales/RENotepad/releases/latest):
+Get it from the [latest release](https://github.com/Noamm9/RENotepad/releases/latest):
 
 - **Installer** (`RENotepad-x.y.z-setup.exe`), recommended. It installs for your
   user account (no admin needed; it can install for all users too) and
@@ -245,7 +245,7 @@ pwsh tests/ui/installer.ps1 # install, reinstall, uninstall (only if not install
 
 ## License
 
-[MIT](LICENSE) © 2026 Nikko Gonzales
+[MIT](LICENSE) © 2026 Noamm9, Nikko Gonzales
 
 ## Changelog
 

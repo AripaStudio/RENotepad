@@ -43,7 +43,7 @@ try {
   Check 'Later closes it' ([Q]::Top($p.Id, 'RENotepadDialog', [NullString]::Value) -eq [IntPtr]::Zero) $true
   Stop-Process -Id $p.Id -Force
 
-  $p, $main = Launch 'nikkoxgonzales/this-repo-does-not-exist'
+  $p, $main = Launch 'Noamm9/this-repo-does-not-exist'
   Cmd $main 49
   $dlg = Wait-Top $p.Id 'RENotepadDialog' 'Check for updates'
   Check 'no release: says it could not check' ($dlg -ne [IntPtr]::Zero) $true

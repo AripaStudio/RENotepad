@@ -2,10 +2,10 @@
 name = "renotepad"
 version = "0.5.0"
 edition = "2021"
-authors = ["Nikko Gonzales"]
+authors = ["Noamm9"]
 description = "RE:Notepad: Windows 10 Notepad, reverse-engineered and rebuilt in Rust, with the Windows 11 look. Dark by default, nothing else added."
 license = "MIT"
-repository = "https://github.com/nikkoxgonzales/RENotepad"
+repository = "https://github.com/Noamm9/RENotepad"
 publish = false
 
 [[bin]]

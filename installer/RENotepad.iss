@@ -9,8 +9,8 @@
 
 #define AppName "RENotepad"
 #define AppExe "RENotepad.exe"
-#define AppPublisher "Nikko Gonzales"
-#define AppURL "https://github.com/nikkoxgonzales/RENotepad"
+#define AppPublisher "Noamm9"
+#define AppURL "https://github.com/Noamm9/RENotepad"
 #define ExePath AddBackslash(SourcePath) + "..\target\release\" + AppExe
 #ifndef AppVersion
   #define AppVersion GetStringFileInfo(ExePath, "ProductVersion")
@@ -30,7 +30,7 @@ AppPublisher={#AppPublisher}
 AppPublisherURL={#AppURL}
 AppSupportURL={#AppURL}/issues
 AppUpdatesURL={#AppURL}/releases
-AppCopyright=© 2026 {#AppPublisher}. MIT licensed.
+AppCopyright=© 2026 {#AppPublisher}, Nikko Gonzales. MIT licensed.
 VersionInfoVersion={#AppVersion}
 DefaultDirName={autopf}\{#AppName}
 DisableProgramGroupPage=yes

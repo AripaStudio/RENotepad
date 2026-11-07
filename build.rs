@@ -32,11 +32,11 @@ BEGIN
   BEGIN
     BLOCK "040904B0"
     BEGIN
-      VALUE "CompanyName", "Nikko Gonzales"
+      VALUE "CompanyName", "Noamm9"
       VALUE "FileDescription", "RENotepad"
       VALUE "FileVersion", "{version}"
       VALUE "InternalName", "RENotepad"
-      VALUE "LegalCopyright", "© 2026 Nikko Gonzales. MIT licensed."
+      VALUE "LegalCopyright", "© 2026 Noamm9, Nikko Gonzales. MIT licensed."
       VALUE "OriginalFilename", "RENotepad.exe"
       VALUE "ProductName", "RENotepad"
       VALUE "ProductVersion", "{version}"

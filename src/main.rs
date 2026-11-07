@@ -1,5 +1,6 @@
-//! RENotepad (RE:Notepad) by Nikko Gonzales: Windows 10 Notepad, reverse-engineered
-//! and rebuilt in Rust, with the Windows 11 look. Dark by default.
+//! RENotepad (RE:Notepad) by Noamm9, originally by Nikko Gonzales: Windows 10
+//! Notepad, reverse-engineered and rebuilt in Rust, with the Windows 11 look.
+//! Dark by default.
 #![windows_subsystem = "windows"]
 
 mod app;

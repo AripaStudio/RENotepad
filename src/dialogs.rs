@@ -215,7 +215,7 @@ It wears the Windows 11 look, with tabs and dark mode by default, and leaves out
 MIT licensed.";
 
 pub fn about(owner: HWND) {
-    let text = format!("Version {} \u{b7} by Nikko Gonzales\n\n{STORY}", env!("CARGO_PKG_VERSION"));
+    let text = format!("Version {} \u{b7} by Noamm9\nOriginally by Nikko Gonzales\n\n{STORY}", env!("CARGO_PKG_VERSION"));
     let spec = Spec { title: crate::app::APP_NAME, text: &text, buttons: &[("OK", IDOK)], icon: true, input: None };
     content_dialog::show(owner, &spec);
 }
