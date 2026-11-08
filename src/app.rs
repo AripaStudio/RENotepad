@@ -20,7 +20,7 @@ use windows_sys::Win32::UI::Controls::*;
 use windows_sys::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, GetCapture, GetKeyState, ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT,
-    VK_BACK, VK_CONTROL, VK_DOWN, VK_LEFT, VK_RIGHT, VK_SHIFT,
+    VK_BACK, VK_CONTROL, VK_DOWN, VK_HOME, VK_LEFT, VK_RIGHT, VK_SHIFT,
 };
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, DragAcceptFiles, DragFinish, DragQueryFileW, SHAddToRecentDocs, SetWindowSubclass, HDROP, SHARD_PATHW};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
@@ -69,6 +69,17 @@ const IDM_AUTO_UPDATES: u16 = 50;
 const IDM_IMPORT_PINS: u16 = 51;
 const IDM_PIN: u16 = 52;
 const IDM_REDO: u16 = 53;
+/// The line commands (VS Code's keys), 54..=63.
+const IDM_MOVE_UP: u16 = 54;
+const IDM_MOVE_DOWN: u16 = 55;
+const IDM_COPY_UP: u16 = 56;
+const IDM_COPY_DOWN: u16 = 57;
+const IDM_DELETE_LINE: u16 = 58;
+const IDM_SELECT_LINE: u16 = 59;
+const IDM_INSERT_BELOW: u16 = 60;
+const IDM_INSERT_ABOVE: u16 = 61;
+const IDM_INDENT: u16 = 62;
+const IDM_OUTDENT: u16 = 63;
 
 const EDIT_ID: usize = 15;
 /// Editor text inset at 96 DPI (Windows 11 Notepad: 16 px left and top).
@@ -177,6 +188,8 @@ pub struct App {
     zoom_wheel: i32,
     /// Ctrl+wheel in progress: the zoom the text is drawn at until it settles.
     zoom_preview: Option<i32>,
+    /// replace_range is running: its EN_CHANGEs aren't recorded one by one.
+    replacing: bool,
     shown_title: String,
     hook: HWINEVENTHOOK,
     pub accel: HACCEL,
@@ -232,6 +245,7 @@ pub fn create(cmd_show: i32, args: &text::Args) -> Option<()> {
             fitting_bars: false,
             zoom_wheel: 0,
             zoom_preview: None,
+            replacing: false,
             shown_title: String::new(),
             hook: std::ptr::null_mut(),
             accel: accelerators(false),
@@ -304,6 +318,7 @@ fn accelerators(global: bool) -> HACCEL {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
     let c = FVIRTKEY | FCONTROL;
     let cs = c | FSHIFT;
+    let alt = FVIRTKEY | FALT;
     let mut list: Vec<(u8, u16, u16)> = vec![
         (FVIRTKEY, VK_F3, IDM_FIND_NEXT),
         (FVIRTKEY | FSHIFT, VK_F3, IDM_FIND_PREV),
@@ -316,7 +331,6 @@ fn accelerators(global: bool) -> HACCEL {
             (c, b'O' as u16, IDM_OPEN),
             (c, b'S' as u16, IDM_SAVE),
             (cs, b'S' as u16, IDM_SAVE_AS),
-            (c, b'P' as u16, IDM_PRINT),
             (c, b'W' as u16, IDM_CLOSE_TAB),
             (c, VK_F4, IDM_CLOSE_TAB),
             (cs, b'W' as u16, IDM_CLOSE_WINDOW),
@@ -338,6 +352,17 @@ fn accelerators(global: bool) -> HACCEL {
             (c, VK_SUBTRACT, IDM_ZOOM_OUT),
             (c, b'0' as u16, IDM_ZOOM_RESET),
             (c, VK_NUMPAD0, IDM_ZOOM_RESET),
+            (alt, b'Z' as u16, IDM_WRAP),
+            (alt, VK_UP, IDM_MOVE_UP),
+            (alt, VK_DOWN, IDM_MOVE_DOWN),
+            (alt | FSHIFT, VK_UP, IDM_COPY_UP),
+            (alt | FSHIFT, VK_DOWN, IDM_COPY_DOWN),
+            (cs, b'K' as u16, IDM_DELETE_LINE),
+            (c, b'L' as u16, IDM_SELECT_LINE),
+            (c, VK_RETURN, IDM_INSERT_BELOW),
+            (cs, VK_RETURN, IDM_INSERT_ABOVE),
+            (c, VK_OEM_6, IDM_INDENT),
+            (c, VK_OEM_4, IDM_OUTDENT),
         ]);
     }
     let table: Vec<ACCEL> = list.iter().map(|&(f, k, cmd)| ACCEL { fVirt: f, key: k, cmd }).collect();
@@ -366,7 +391,7 @@ fn build_menus() -> [HMENU; MENU_COUNT] {
         add(file, IDM_PIN, "Pin to &jump list");
         sep(file);
         add(file, IDM_PAGE_SETUP, "Page set&up...");
-        add(file, IDM_PRINT, "&Print...\tCtrl+P");
+        add(file, IDM_PRINT, "&Print...");
         sep(file);
         add(file, IDM_CLOSE_TAB, "&Close tab\tCtrl+W");
         add(file, IDM_CLOSE_WINDOW, "Close win&dow\tCtrl+Shift+W");
@@ -755,14 +780,13 @@ impl App {
         self.docs[i].history.record(get_edit_text(e), end as usize);
     }
 
-    /// The history already holds the result, so the EN_CHANGE this causes records nothing.
+    /// The history already holds the result, so the change isn't recorded.
     fn undo(&mut self, redo: bool) {
         let h = &mut self.doc_mut().history;
         let Some(c) = (if redo { h.redo() } else { h.undo() }) else { return };
         let e = self.edit();
+        self.replace_range(c.start, c.end, &c.text);
         unsafe {
-            SendMessageW(e, EM_SETSEL, c.start, c.end as isize);
-            self.replace_sel(&c.text);
             SendMessageW(e, EM_SETSEL, c.sel.0, c.sel.1 as isize);
             SendMessageW(e, EM_SCROLLCARET, 0, 0);
             SendMessageW(e, EM_SETMODIFY, !self.doc().history.is_saved() as usize, 0);
@@ -775,6 +799,123 @@ impl App {
         let mut t = text.to_vec();
         t.push(0);
         unsafe { SendMessageW(self.edit(), EM_REPLACESEL, 1, t.as_ptr() as isize) };
+    }
+
+    /// The line break Enter types in this tab.
+    fn eol(&self) -> &'static [u16] {
+        match unsafe { SendMessageW(self.edit(), EM_GETENDOFLINE, 0, 0) } {
+            2 => &[0x0D],
+            3 => &[0x0A],
+            _ => &[0x0D, 0x0A],
+        }
+    }
+
+    /// `start..end` becomes `text`. Over a selection the control reports its
+    /// delete and its insert as two EN_CHANGEs; the caller records the change once.
+    fn replace_range(&mut self, start: usize, end: usize, text: &[u16]) {
+        self.replacing = true;
+        unsafe { SendMessageW(self.edit(), EM_SETSEL, start, end as isize) };
+        self.replace_sel(text);
+        self.replacing = false;
+    }
+
+    /// One undo step.
+    fn apply_line_edit(&mut self, edit: text::LineEdit) {
+        self.replace_range(edit.start, edit.end, &edit.text);
+        self.record_edit(self.cur);
+        let e = self.edit();
+        unsafe {
+            SendMessageW(e, EM_SETSEL, edit.sel.0, edit.sel.1 as isize);
+            SendMessageW(e, EM_SCROLLCARET, 0, 0);
+        }
+    }
+
+    fn line_command(&mut self, id: u16) {
+        let t = get_edit_text(self.edit());
+        let sel = self.sel();
+        let edit = match id {
+            IDM_MOVE_UP | IDM_MOVE_DOWN => text::move_lines(&t, sel, id == IDM_MOVE_UP),
+            IDM_COPY_UP | IDM_COPY_DOWN => Some(text::copy_lines(&t, sel, id == IDM_COPY_UP, self.eol())),
+            IDM_DELETE_LINE => Some(text::delete_lines(&t, sel)),
+            IDM_INSERT_BELOW | IDM_INSERT_ABOVE => Some(text::insert_line(&t, sel, id == IDM_INSERT_ABOVE, self.eol())),
+            IDM_INDENT | IDM_OUTDENT => text::indent_lines(&t, sel, &text::indent_unit(&t), id == IDM_OUTDENT),
+            IDM_SELECT_LINE => {
+                let (s, e) = text::select_line(&t, sel);
+                unsafe {
+                    SendMessageW(self.edit(), EM_SETSEL, s, e as isize);
+                    SendMessageW(self.edit(), EM_SCROLLCARET, 0, 0);
+                }
+                None
+            }
+            _ => None,
+        };
+        let Some(edit) = edit else { return };
+        self.apply_line_edit(edit);
+    }
+
+    /// Tab over several lines indents them, Shift+Tab always outdents; a
+    /// selection inside one line is typed over as usual (false).
+    fn tab_key(&mut self, shift: bool) -> bool {
+        let t = get_edit_text(self.edit());
+        let (s, e) = self.sel();
+        if !shift && text::line_start(&t, s) == text::line_start(&t, e) {
+            return false;
+        }
+        if let Some(edit) = text::indent_lines(&t, (s, e), &text::indent_unit(&t), shift) {
+            self.apply_line_edit(edit);
+        }
+        true
+    }
+
+    /// Enter on an indented line indents the new one the same.
+    fn enter_key(&self) -> bool {
+        let t = get_edit_text(self.edit());
+        let indent = text::enter_indent(&t, self.sel().0);
+        if indent.is_empty() {
+            return false;
+        }
+        self.replace_sel(&[self.eol(), indent].concat());
+        true
+    }
+
+    /// Smart Home on the first row of a line; a wrapped line's later rows go to their own start.
+    fn home_key(&self, shift: bool) -> bool {
+        let e = self.edit();
+        let t = get_edit_text(e);
+        let caret = unsafe { SendMessageW(e, EM_GETCARETINDEX, 0, 0) } as usize;
+        let row_start = unsafe { SendMessageW(e, EM_LINEINDEX, SendMessageW(e, EM_LINEFROMCHAR, caret, 0) as usize, 0) } as usize;
+        if row_start != text::line_start(&t, caret) {
+            return false;
+        }
+        let to = text::smart_home(&t, caret);
+        let (s, end) = self.sel();
+        let anchor = if !shift { to } else if caret == s { end } else { s };
+        unsafe {
+            SendMessageW(e, EM_SETSEL, anchor, to as isize);
+            SendMessageW(e, EM_SCROLLCARET, 0, 0);
+        }
+        true
+    }
+
+    /// Ctrl+C / Ctrl+X with nothing selected take the whole line.
+    fn copy_line(&self, cut: bool) -> bool {
+        let e = self.edit();
+        let (s, end) = self.sel();
+        if s != end {
+            return false;
+        }
+        let (ls, le) = text::select_line(&get_edit_text(e), (s, s));
+        if ls == le {
+            return true;
+        }
+        unsafe {
+            SendMessageW(e, EM_SETSEL, ls, le as isize);
+            SendMessageW(e, if cut { WM_CUT } else { WM_COPY }, 0, 0);
+            if !cut {
+                SendMessageW(e, EM_SETSEL, s, s as isize);
+            }
+        }
+        true
     }
 
     // ------------------------------------------------------------ tabs
@@ -1551,6 +1692,7 @@ impl App {
                 }
                 IDM_TIME_DATE => self.replace_sel(&text::timestamp(false)),
                 IDM_WRAP => self.toggle_wrap(),
+                IDM_MOVE_UP..=IDM_OUTDENT => self.line_command(id),
                 IDM_FONT => self.choose_font(),
                 IDM_SYNTAX => {
                     self.settings.syntax = !self.settings.syntax;
@@ -1841,7 +1983,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             let id = (wparam & 0xFFFF) as u16;
             let code = (wparam >> 16) as u32;
             if let Some(i) = a.docs.iter().position(|d| d.edit == lparam as HWND) {
-                if code == EN_CHANGE {
+                if code == EN_CHANGE && !a.replacing {
                     a.record_edit(i);
                 }
                 if i == a.cur {
@@ -2008,6 +2150,22 @@ unsafe extern "system" fn edit_subclass(hwnd: HWND, msg: u32, wparam: WPARAM, lp
     }
     if msg == WM_KEYDOWN && wparam == VK_BACK as usize && GetKeyState(VK_CONTROL as i32) < 0 {
         delete_word_back(hwnd);
+        if let Some(a) = try_app() {
+            a.paint_syntax(hwnd, std::ptr::null_mut());
+        }
+        return 0;
+    }
+    // VS Code's Tab, Enter, Home and Ctrl+C/X; each falls back to the control's own when it doesn't apply.
+    let shift = GetKeyState(VK_SHIFT as i32) < 0;
+    let handled = try_app().is_some_and(|a| match (msg, wparam as u16) {
+        (WM_CHAR, 0x09) => a.tab_key(shift),
+        (WM_CHAR, 0x0D) => a.enter_key(),
+        (WM_CHAR, 0x03) => a.copy_line(false),
+        (WM_CHAR, 0x18) => a.copy_line(true),
+        (WM_KEYDOWN, VK_HOME) if GetKeyState(VK_CONTROL as i32) >= 0 => a.home_key(shift),
+        _ => false,
+    });
+    if handled {
         if let Some(a) = try_app() {
             a.paint_syntax(hwnd, std::ptr::null_mut());
         }
