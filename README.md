@@ -251,6 +251,15 @@ pwsh tests/ui/installer.ps1 # install, reinstall, uninstall (only if not install
 
 <!-- Newest on top. Format: `YYYY-MM-DD — version: what changed`. -->
 
+- 2026-11-08 — 0.6.0:
+  - Syntax highlighting for .json, .toml, .xml, .log, .kt and .java. Log files
+    color a warning or error's whole entry, stack traces included.
+  - Multi-level undo and redo (Ctrl+Y, Ctrl+Shift+Z, *Edit › Redo*). Typing
+    over a selection is one undo step.
+  - Ctrl+Backspace deletes the previous word.
+  - Instant Ctrl+wheel zoom and smooth scrolling in syntax-colored files.
+  - Fixed right-to-left text sitting too close to the right edge.
+  - RENotepad now lives at Noamm9/RENotepad; updates come from there.
 - 2026-11-06 — 0.5.0:
   - *Settings › Theme*: Light, Dark, One Dark and Nord.
   - Open files reload by themselves when another program changes them, unless
