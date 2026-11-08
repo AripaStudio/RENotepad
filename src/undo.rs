@@ -6,6 +6,8 @@ struct Step {
     at: usize,
     removed: Vec<u16>,
     inserted: Vec<u16>,
+    /// A key typed over a selection: the keys after it join it, as typing does.
+    typed: bool,
 }
 
 /// What undo/redo does to the control: `start..end` becomes `text`, then `sel` is selected.
@@ -74,7 +76,9 @@ impl History {
         if head + tail == old.len() && head + tail == now.len() {
             return;
         }
-        let step = Step { at: head, removed: old[head..old.len() - tail].to_vec(), inserted: now[head..now.len() - tail].to_vec() };
+        let (removed, inserted) = (old[head..old.len() - tail].to_vec(), now[head..now.len() - tail].to_vec());
+        let typed = !removed.is_empty() && is_key(&inserted);
+        let step = Step { at: head, removed, inserted, typed };
         self.text = now;
         self.redo.clear();
         if self.saved.is_some_and(|n| n > self.undo.len()) {
@@ -91,7 +95,7 @@ impl History {
     /// Folds typing into the previous step until a new word starts, and runs of Backspace/Delete together.
     fn merge(&mut self, step: &Step) -> bool {
         let Some(last) = self.undo.last_mut() else { return false };
-        if last.removed.is_empty() && step.removed.is_empty() && is_key(&step.inserted) {
+        if (last.removed.is_empty() || last.typed) && step.removed.is_empty() && is_key(&step.inserted) {
             let new_word = last.inserted.last().is_some_and(|&c| is_space(c)) && !is_space(step.inserted[0]);
             if step.at != last.at + last.inserted.len() || new_word {
                 return false;
@@ -225,6 +229,19 @@ mod tests {
         assert!(!h.is_saved());
         h.undo();
         assert!(!h.is_saved());
+    }
+
+    #[test]
+    fn typing_over_a_selection_is_one_step() {
+        let mut h = History::new(w("a bc d"));
+        h.record(w("a x d"), 3);
+        h.record(w("a xy d"), 4);
+        let mut t = h.text.clone();
+        let c = h.undo().unwrap();
+        assert_eq!(c.sel, (2, 4));
+        apply(&mut t, &c);
+        assert_eq!(t, w("a bc d"));
+        assert!(!h.can_undo());
     }
 
     #[test]

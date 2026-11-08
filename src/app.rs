@@ -819,6 +819,19 @@ impl App {
         self.replacing = false;
     }
 
+    /// The tab whose selection `edit` is about to replace, unless a replace is already being recorded.
+    fn over_sel(&self, edit: HWND) -> Option<usize> {
+        if self.replacing {
+            return None;
+        }
+        let (mut s, mut e) = (0u32, 0u32);
+        unsafe { SendMessageW(edit, EM_GETSEL, &mut s as *mut u32 as usize, &mut e as *mut u32 as isize) };
+        if s == e {
+            return None;
+        }
+        self.docs.iter().position(|d| d.edit == edit)
+    }
+
     /// One undo step.
     fn apply_line_edit(&mut self, edit: text::LineEdit) {
         self.replace_range(edit.start, edit.end, &edit.text);
@@ -2192,7 +2205,17 @@ unsafe extern "system" fn edit_subclass(hwnd: HWND, msg: u32, wparam: WPARAM, lp
     if held {
         SendMessageW(hwnd, WM_SETREDRAW, 0, 0);
     }
+    // Typing, pasting or replacing over a selection: the control reports its
+    // delete and its insert as two EN_CHANGEs, recorded here as one change.
+    let over_sel = matches!(msg, WM_CHAR | WM_PASTE | EM_REPLACESEL).then(|| try_app().and_then(|a| a.over_sel(hwnd))).flatten();
+    if let (Some(_), Some(a)) = (over_sel, try_app()) {
+        a.replacing = true;
+    }
     let r = DefSubclassProc(hwnd, msg, wparam, lparam);
+    if let (Some(i), Some(a)) = (over_sel, try_app()) {
+        a.replacing = false;
+        a.record_edit(i);
+    }
     if held {
         SendMessageW(hwnd, WM_SETREDRAW, 1, 0);
         RedrawWindow(hwnd, std::ptr::null(), std::ptr::null_mut(), RDW_INVALIDATE | RDW_UPDATENOW | RDW_FRAME);
