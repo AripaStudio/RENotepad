@@ -134,15 +134,7 @@ It's the classic Notepad, minus the extras.
 - **Edit:** Undo, Redo, Cut, Copy, Paste, Delete, Find, Find next/previous
   (F3 / Shift+F3), Replace, Go to, Select all, Time/Date (F5), Font.
 - **View:** Zoom (Ctrl+Plus / Ctrl+Minus / Ctrl+0 / Ctrl+wheel), Status bar,
-  Word wrap (Alt+Z).
-- **VS Code's line keys:**
-  - Alt+↑ / Alt+↓ move the line (or the selected lines); Shift+Alt+↑ / ↓ copy them.
-  - Ctrl+Shift+K deletes the line, Ctrl+L selects it (again for the next one).
-  - Ctrl+Enter / Ctrl+Shift+Enter start a new line below / above.
-  - Ctrl+] / Ctrl+[ indent and outdent; so do Tab / Shift+Tab over several lines.
-  - Ctrl+C / Ctrl+X with nothing selected copy or cut the whole line.
-  - Enter keeps the line's indentation; Home goes to its first character, then to column 0.
-  - Print has no shortcut, as in VS Code: Ctrl+P does nothing.
+  Word wrap.
 - **Status bar:**
   - Line and column, then the character count ("5 of 120 characters" while
     text is selected).
