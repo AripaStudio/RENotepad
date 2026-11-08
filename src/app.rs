@@ -297,7 +297,7 @@ pub fn create(cmd_show: i32, args: &text::Args) -> Option<()> {
         if a.settings.check_updates {
             update::check_async(hwnd, false);
         }
-        SetTimer(hwnd, WATCH_TIMER, WATCH_MS, None);
+        SetTimer(hwnd, WATCH_TIMER, WATCH_MS, None);    
         SetFocus(a.edit());
         Some(())
     }
@@ -402,7 +402,7 @@ fn build_menus() -> [HMENU; MENU_COUNT] {
         add(zoom, IDM_ZOOM_RESET, "&Restore default zoom\tCtrl+0");
         let w = wide("&Zoom");
         AppendMenuW(view, MF_POPUP, zoom as usize, w.as_ptr());
-        add(view, IDM_STATUS_BAR, "&Status bar");
+        add(view, IDM_STATUS_BAR, "&Status bar");        
         add(view, IDM_WRAP, "&Word wrap");
         add(view, IDM_SYNTAX, "Syntax &highlighting");
 
@@ -563,10 +563,15 @@ impl App {
         unsafe {
             let mut rc: RECT = std::mem::zeroed();
             GetClientRect(edit, &mut rc);
+            
+            //Hideen vertical bar : layout() widened the control by its width.
+            let extra_w = if self.bars.0 { 0 } else {GetSystemMetricsForDpi(SM_CXVSCROLL, self.dpi)};
+
+
             let pad = self.s(EDIT_PAD);
             rc.left += pad;
             rc.top += pad;
-            rc.right = (rc.right - pad).max(rc.left + 1);
+            rc.right = (rc.right - extra_w -  pad).max(rc.left + 1);
             SendMessageW(edit, EM_SETRECTNP, 0, &rc as *const RECT as isize);
         }
     }
@@ -1605,7 +1610,7 @@ impl App {
                     if let Some(path) = self.doc().path.clone() {
                         jumplist::run_async(self.hwnd, jumplist::PIN, vec!["/PinToJumpList".into(), path]);
                     }
-                }
+                }                
                 _ => {}
             }
         }
