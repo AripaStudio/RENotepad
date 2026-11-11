@@ -1421,6 +1421,7 @@ impl App {
         for d in &self.docs {
             theme::apply_control(d.edit, "DarkMode_Explorer");
         }
+        self.layout();
         unsafe {
             if !self.find_dlg.is_null() {
                 theme::apply_dialog(self.find_dlg);
