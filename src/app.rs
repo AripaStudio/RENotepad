@@ -70,6 +70,7 @@ const IDM_IMPORT_PINS: u16 = 51;
 const IDM_PIN: u16 = 52;
 const IDM_REDO: u16 = 53;
 const IDM_HELP_SHORTCUTS: u16 = 54;
+const IDM_HELP_SEND_BUGS: u16 = 55;
 
 const EDIT_ID: usize = 15;
 /// Editor text inset at 96 DPI (Windows 11 Notepad: 16 px left and top).
@@ -410,6 +411,7 @@ fn build_menus() -> [HMENU; MENU_COUNT] {
 
         let help = CreatePopupMenu();
         add(help, IDM_HELP_SHORTCUTS, "&Show all shortcuts\tCtrl+/");
+        add(help, IDM_HELP_SEND_BUGS, "&Send bug to us");
         
 
         let settings = CreatePopupMenu();
@@ -1620,7 +1622,10 @@ impl App {
                 }
                 IDM_HELP_SHORTCUTS => {
                     dialogs::shortcuts(self.hwnd);
-                }     
+                }
+                IDM_HELP_SEND_BUGS => {
+                    open_url(self.hwnd, "https://github.com/AripaStudio/RENotepad/issues");
+                }
                 _ => {}
             }
         }
