@@ -69,6 +69,8 @@ const IDM_AUTO_UPDATES: u16 = 50;
 const IDM_IMPORT_PINS: u16 = 51;
 const IDM_PIN: u16 = 52;
 const IDM_REDO: u16 = 53;
+const IDM_HELP_SHORTCUTS: u16 = 54;
+const IDM_HELP_SEND_BUGS: u16 = 55;
 
 const EDIT_ID: usize = 15;
 /// Editor text inset at 96 DPI (Windows 11 Notepad: 16 px left and top).
@@ -341,6 +343,7 @@ fn accelerators(global: bool) -> HACCEL {
             (c, VK_SUBTRACT, IDM_ZOOM_OUT),
             (c, b'0' as u16, IDM_ZOOM_RESET),
             (c, VK_NUMPAD0, IDM_ZOOM_RESET),
+            (c, VK_OEM_2, IDM_HELP_SHORTCUTS),
         ]);
     }
     let table: Vec<ACCEL> = list.iter().map(|&(f, k, cmd)| ACCEL { fVirt: f, key: k, cmd }).collect();
@@ -406,6 +409,11 @@ fn build_menus() -> [HMENU; MENU_COUNT] {
         add(view, IDM_WRAP, "&Word wrap");
         add(view, IDM_SYNTAX, "Syntax &highlighting");
 
+        let help = CreatePopupMenu();
+        add(help, IDM_HELP_SHORTCUTS, "&Show all shortcuts\tCtrl+/");
+        add(help, IDM_HELP_SEND_BUGS, "&Send bug to us");
+        
+
         let settings = CreatePopupMenu();
         let themes = CreatePopupMenu();
         for (i, t) in Theme::ALL.iter().enumerate() {
@@ -420,7 +428,7 @@ fn build_menus() -> [HMENU; MENU_COUNT] {
         add(settings, IDM_IMPORT_PINS, "&Import pinned files from Notepad");
         sep(settings);
         add(settings, IDM_ABOUT, &format!("&About {APP_NAME}"));
-        [file, edit, view, settings]
+        [file, edit, view, help, settings]
     }
 }
 
@@ -1421,6 +1429,7 @@ impl App {
         for d in &self.docs {
             theme::apply_control(d.edit, "DarkMode_Explorer");
         }
+        self.layout();
         unsafe {
             if !self.find_dlg.is_null() {
                 theme::apply_dialog(self.find_dlg);
@@ -1610,7 +1619,13 @@ impl App {
                     if let Some(path) = self.doc().path.clone() {
                         jumplist::run_async(self.hwnd, jumplist::PIN, vec!["/PinToJumpList".into(), path]);
                     }
-                }                
+                }
+                IDM_HELP_SHORTCUTS => {
+                    dialogs::shortcuts(self.hwnd);
+                }
+                IDM_HELP_SEND_BUGS => {
+                    open_url(self.hwnd, "https://github.com/Noamm9/RENotepad/issues");
+                }
                 _ => {}
             }
         }
@@ -1824,6 +1839,10 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 }
                 Some('v') => {
                     a.track_menu(2, true);
+                    0
+                }
+                Some('h') => {
+                    a.track_menu(3, true);
                     0
                 }
                 _ => 0,

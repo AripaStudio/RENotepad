@@ -219,3 +219,112 @@ pub fn about(owner: HWND) {
     let spec = Spec { title: crate::app::APP_NAME, text: &text, buttons: &[("OK", IDOK)], icon: true, input: None };
     content_dialog::show(owner, &spec);
 }
+
+
+
+// ---------------------------------------------------------------- help - shortcuts
+const SHORTCUTS: &[(&str, &str)] = &[
+    // File
+    ("New tab", "Ctrl+N, Ctrl+T"),
+    ("New window", "Ctrl+Shift+N"),
+    ("Open", "Ctrl+O"),
+    ("Save", "Ctrl+S"),
+    ("Save as", "Ctrl+Shift+S"),
+    ("Print", "Ctrl+P"),
+    ("Close tab", "Ctrl+W, Ctrl+F4"),
+    ("Close window", "Ctrl+Shift+W"),
+    // Edit
+    ("Undo", "Ctrl+Z"),
+    ("Redo", "Ctrl+Y, Ctrl+Shift+Z"),
+    ("Cut", "Ctrl+X"),
+    ("Copy", "Ctrl+C"),
+    ("Paste", "Ctrl+V"),
+    ("Delete", "Del"),
+    ("Delete previous word", "Ctrl+Backspace"),
+    ("Find", "Ctrl+F"),
+    ("Find next", "F3"),
+    ("Find previous", "Shift+F3"),
+    ("Replace", "Ctrl+H"),
+    ("Go to", "Ctrl+G"),
+    ("Select all", "Ctrl+A"),
+    ("Time and date", "F5"),
+    // View
+    ("Zoom in", "Ctrl+Plus, Ctrl+Mouse wheel up"),
+    ("Zoom out", "Ctrl+Minus, Ctrl+Mouse wheel down"),
+    ("Restore default zoom", "Ctrl+0"),
+    // Tabs
+    ("Next tab", "Ctrl+Tab, Ctrl+PgDn"),
+    ("Previous tab", "Ctrl+Shift+Tab, Ctrl+PgUp"),
+    // Help
+    ("Show all shortcuts", "Ctrl+/"),
+];
+pub fn shortcuts(owner: HWND) {
+    let template = Template::new("Keyboard shortcuts", 0, 200, 150).build();
+    unsafe {
+        DialogBoxIndirectParamW(hinstance(), template.as_ptr().cast(), owner, Some(shortcuts_proc), 0);
+    }
+}
+
+unsafe extern "system" fn shortcuts_proc(dlg: HWND, msg: u32, wparam: usize, _lparam: isize) -> isize {
+    match msg {
+        WM_INITDIALOG => {
+            let height = 40 + SHORTCUTS.len() as i32 * 20 + 60;
+            SetWindowPos(dlg, std::ptr::null_mut(), 0, 0, 560, height, SWP_NOMOVE | SWP_NOZORDER);
+            center_on_owner(dlg);
+            theme::apply_dialog(dlg);
+
+            let mut rc: RECT = std::mem::zeroed();
+            GetClientRect(dlg, &mut rc);
+
+            add_label(dlg, "Action", 16, 12, 220);
+            add_label(dlg, "Shortcut", 240, 12, 300);
+            for (row, (action, keys)) in SHORTCUTS.iter().enumerate() {
+                let y = 36 + row as i32 * 20;
+                add_label(dlg, action, 16, y, 220);
+                add_label(dlg, keys, 240, y, 300);
+            }
+
+            let ok = CreateWindowExW(
+                0,
+                wide("BUTTON").as_ptr(),
+                wide("OK").as_ptr(),
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON as u32,
+                rc.right - 100, rc.bottom - 44, 88, 28,
+                dlg,
+                IDOK as isize as HMENU,
+                hinstance(),
+                std::ptr::null(),
+            );
+            SendMessageW(ok, WM_SETFONT, SendMessageW(dlg, WM_GETFONT, 0, 0) as usize, 1);
+            1
+        }
+        WM_CTLCOLORDLG | WM_CTLCOLORSTATIC => theme::dialog_color_msg(msg, wparam).unwrap_or(0),
+        WM_COMMAND => match (wparam & 0xFFFF) as i32 {
+            IDOK | IDCANCEL => {
+                EndDialog(dlg, 0);
+                1
+            }
+            _ => 0,
+        },
+        _ => 0,
+    }
+}
+
+
+fn add_label(parent: HWND, text: &str, x: i32, y: i32, w: i32) {
+    let t = wide(text);
+    unsafe {
+        let h = CreateWindowExW(
+            0,
+            wide("STATIC").as_ptr(),
+            t.as_ptr(),
+            WS_CHILD | WS_VISIBLE,
+            x, y, w, 18,
+            parent,
+            std::ptr::null_mut(),
+            hinstance(),
+            std::ptr::null(),
+        );
+        SendMessageW(h, WM_SETFONT, SendMessageW(parent, WM_GETFONT, 0, 0) as usize, 1);
+    }
+}

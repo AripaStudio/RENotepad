@@ -9,10 +9,10 @@ use windows_sys::Win32::Foundation::RECT;
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::{DestroyIcon, DrawIconEx, LoadImageW, DI_NORMAL, HICON, IMAGE_ICON, LR_DEFAULTCOLOR};
 
-/// File, Edit, View, then the settings gear at the far right.
-pub const MENU_COUNT: usize = 4;
-pub const SETTINGS_MENU: usize = 3;
-const MENU_LABELS: [&str; 3] = ["&File", "&Edit", "&View"];
+/// File, Edit, View, Help then the settings gear at the far right.
+pub const MENU_COUNT: usize = 5;
+pub const SETTINGS_MENU: usize = 4;
+const MENU_LABELS: [&str; 4] = ["&File", "&Edit", "&View", "&Help"];
 
 // Geometry at 96 DPI, measured from Windows 11 Notepad.
 const STRIP_H: i32 = 42;
@@ -83,7 +83,7 @@ pub struct Chrome {
     glyph_12: HFONT,
     glyph_16: HFONT,
     icon: HICON,
-    menu_w: [i32; 3],
+    menu_w: [i32; 4],
     pub hover: Hit,
     pub pressed: Hit,
     pub open_menu: Option<usize>,
@@ -111,7 +111,7 @@ impl Chrome {
             glyph_12: null,
             glyph_16: null,
             icon: null,
-            menu_w: [0; 3],
+            menu_w: [0; 4],
             hover: Hit::Nothing,
             pressed: Hit::Nothing,
             open_menu: None,
