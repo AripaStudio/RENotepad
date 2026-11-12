@@ -2041,12 +2041,19 @@ unsafe extern "system" fn edit_subclass(hwnd: HWND, msg: u32, wparam: WPARAM, lp
             a.commit_zoom();
         }
     }
+
     // The edit control types Ctrl+Backspace (0x7F) and unbound Ctrl+letters
     // in as raw control characters. Ctrl+C/V/X (0x03/0x16/0x18) must get
     // through: the control does copy/paste/cut off those. Ctrl+Z is ours.
     if msg == WM_CHAR && (wparam == 0x7F || (wparam < 0x20 && ![0x03, 0x08, 0x09, 0x0A, 0x0D, 0x16, 0x18].contains(&wparam))) {
         return 0;
     }
+
+    // Alt+letter sends SC_KEYMENU to the focused child, not the main window
+    if msg == WM_SYSCOMMAND && (wparam & 0xFFF0) as u32 == SC_KEYMENU {
+        return SendMessageW(GetParent(hwnd), msg, wparam, lparam);
+    }
+
     // Its right-click Undo, which would otherwise toggle its own one-step buffer.
     if matches!(msg, WM_UNDO | EM_UNDO) {
         if let Some(a) = try_app() {
@@ -2054,6 +2061,7 @@ unsafe extern "system" fn edit_subclass(hwnd: HWND, msg: u32, wparam: WPARAM, lp
         }
         return 1;
     }
+
     if msg == WM_KEYDOWN && wparam == VK_BACK as usize && GetKeyState(VK_CONTROL as i32) < 0 {
         delete_word_back(hwnd);
         if let Some(a) = try_app() {
@@ -2061,9 +2069,11 @@ unsafe extern "system" fn edit_subclass(hwnd: HWND, msg: u32, wparam: WPARAM, lp
         }
         return 0;
     }
+
     if msg == WM_PAINT && try_app().is_some_and(|a| a.paint_buffered(hwnd)) {
         return 0;
     }
+
     let colored = try_app().is_some_and(|a| a.syntax_lang(hwnd).is_some());
     // paint_buffered fills the background itself; erasing first blanks the screen.
     if msg == WM_ERASEBKGND && (colored || try_app().is_some_and(|a| a.zoom_preview.is_some())) {
