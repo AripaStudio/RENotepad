@@ -135,6 +135,9 @@ It's the classic Notepad, minus the extras.
   (F3 / Shift+F3), Replace, Go to, Select all, Time/Date (F5), Font.
 - **View:** Zoom (Ctrl+Plus / Ctrl+Minus / Ctrl+0 / Ctrl+wheel), Status bar,
   Word wrap.
+- **Help:**
+  - Help › Show all shortcuts (Ctrl+/) opens a list of the keyboard shortcuts.
+  - Help › Send bug to us opens the issues page in your browser.
 - **Status bar:**
   - Line and column, then the character count ("5 of 120 characters" while
     text is selected).
@@ -159,6 +162,7 @@ network request is the update check:
   exists. Click the notice, or use *Settings › Check for updates*, to see the
   details and the download link.
 - How to turn it off: *Settings › Check for updates at startup*.
+- Bug reports can be sent from *Help › Send bug to us*.
 
 RENotepad never downloads or installs anything by itself.
 
