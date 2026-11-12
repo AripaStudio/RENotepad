@@ -4,7 +4,6 @@
 
 use crate::{theme, wide};
 use windows_sys::Win32::Foundation::{HWND, RECT};
-use windows_sys::Win32::Graphics::Gdi::{DEFAULT_GUI_FONT, GetStockObject};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
@@ -285,7 +284,7 @@ unsafe extern "system" fn shortcuts_proc(dlg: HWND, msg: u32, wparam: usize, _lp
                 add_label(dlg, keys, 240, y, 300);
             }
 
-            CreateWindowExW(
+            let ok = CreateWindowExW(
                 0,
                 wide("BUTTON").as_ptr(),
                 wide("OK").as_ptr(),
@@ -296,6 +295,7 @@ unsafe extern "system" fn shortcuts_proc(dlg: HWND, msg: u32, wparam: usize, _lp
                 hinstance(),
                 std::ptr::null(),
             );
+            SendMessageW(ok, WM_SETFONT, SendMessageW(dlg, WM_GETFONT, 0, 0) as usize, 1);
             1
         }
         WM_CTLCOLORDLG | WM_CTLCOLORSTATIC => theme::dialog_color_msg(msg, wparam).unwrap_or(0),
@@ -325,6 +325,6 @@ fn add_label(parent: HWND, text: &str, x: i32, y: i32, w: i32) {
             hinstance(),
             std::ptr::null(),
         );
-        SendMessageW(h, WM_SETFONT, GetStockObject(DEFAULT_GUI_FONT) as usize, 1);
+        SendMessageW(h, WM_SETFONT, SendMessageW(parent, WM_GETFONT, 0, 0) as usize, 1);
     }
 }

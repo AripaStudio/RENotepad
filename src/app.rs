@@ -1841,6 +1841,10 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                     a.track_menu(2, true);
                     0
                 }
+                Some('h') => {
+                    a.track_menu(3, true);
+                    0
+                }
                 _ => 0,
             }
         }
