@@ -1624,7 +1624,7 @@ impl App {
                     dialogs::shortcuts(self.hwnd);
                 }
                 IDM_HELP_SEND_BUGS => {
-                    open_url(self.hwnd, "https://github.com/AripaStudio/RENotepad/issues");
+                    open_url(self.hwnd, "https://github.com/Noamm9/RENotepad/issues");
                 }
                 _ => {}
             }
