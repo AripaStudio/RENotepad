@@ -2,6 +2,7 @@
 //! color, so it paints the text as usual and the colored runs are drawn again
 //! on top, at the positions the control reports for each character.
 
+use crate::app::{EM_FILELINEFROMCHAR, EM_FILELINEINDEX};
 use crate::{muldiv, theme};
 use windows_sys::Win32::Foundation::{HWND, RECT, SIZE};
 use windows_sys::Win32::Graphics::Gdi::*;
@@ -585,6 +586,51 @@ pub unsafe fn paint(edit: HWND, hdc: HDC, lang: Lang, font: HFONT, cache: &mut C
     }
     RestoreDC(hdc, saved);
     ShowCaret(edit);
+}
+
+/// Line numbers in the margin left of the text, right-aligned `gap` short of
+/// it. A wrapped line gets its number on its first row only.
+pub unsafe fn paint_gutter(edit: HWND, hdc: HDC, font: HFONT, gap: i32) {
+    let mut rc: RECT = std::mem::zeroed();
+    SendMessageW(edit, EM_GETRECT, 0, &mut rc as *mut RECT as isize);
+    let mut client: RECT = std::mem::zeroed();
+    GetClientRect(edit, &mut client);
+    let saved = SaveDC(hdc);
+    // The control leaves the DC clipped to the text.
+    SelectClipRgn(hdc, std::ptr::null_mut());
+    SelectObject(hdc, font);
+    SetBkMode(hdc, OPAQUE as i32);
+    SetBkColor(hdc, theme::edit_bg());
+    SetTextColor(hdc, theme::syntax().muted);
+    SetTextAlign(hdc, TA_RIGHT | TA_TOP);
+    let mut tm: TEXTMETRICW = std::mem::zeroed();
+    GetTextMetricsW(hdc, &mut tm);
+    let first = SendMessageW(edit, EM_GETFIRSTVISIBLELINE, 0, 0) as usize;
+    let count = SendMessageW(edit, EM_GETLINECOUNT, 0, 0) as usize;
+    let mut y = rc.top;
+    for line in first..count {
+        let start = SendMessageW(edit, EM_LINEINDEX, line, 0);
+        if start < 0 {
+            break;
+        }
+        // No position for the empty line after a final line break.
+        y = pos_from_char(edit, start as usize).map_or(y, |(_, y)| y);
+        if y >= rc.bottom {
+            break;
+        }
+        let file_line = SendMessageW(edit, EM_FILELINEFROMCHAR, start as usize, 0);
+        let label: Vec<u16> = if SendMessageW(edit, EM_FILELINEINDEX, file_line as usize, 0) == start {
+            (file_line + 1).to_string().encode_utf16().collect()
+        } else {
+            Vec::new()
+        };
+        let r = RECT { left: 0, top: y, right: rc.left, bottom: (y + tm.tmHeight).min(rc.bottom) };
+        ExtTextOutW(hdc, rc.left - gap, y, ETO_OPAQUE | ETO_CLIPPED, &r, label.as_ptr(), label.len() as u32, std::ptr::null());
+        y += tm.tmHeight;
+    }
+    let rest = RECT { left: 0, top: y.min(rc.bottom), right: rc.left, bottom: client.bottom };
+    ExtTextOutW(hdc, 0, 0, ETO_OPAQUE, &rest, std::ptr::null(), 0, std::ptr::null());
+    RestoreDC(hdc, saved);
 }
 
 /// One run, split at tabs so the tab stops stay the control's. Asking the

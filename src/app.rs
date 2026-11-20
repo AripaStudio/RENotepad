@@ -81,8 +81,8 @@ const EM_SETEXTENDEDSTYLE: u32 = 0x150A;
 const EM_SETENDOFLINE: u32 = 0x150C;
 const EM_GETENDOFLINE: u32 = 0x150D;
 const EM_GETCARETINDEX: u32 = 0x1512;
-const EM_FILELINEFROMCHAR: u32 = 0x1513;
-const EM_FILELINEINDEX: u32 = 0x1514;
+pub const EM_FILELINEFROMCHAR: u32 = 0x1513;
+pub const EM_FILELINEINDEX: u32 = 0x1514;
 const EM_GETFILELINECOUNT: u32 = 0x1517;
 const EM_SETZOOM: u32 = 0x04E1;
 const ES_EX_ALLOWEOL_ALL: usize = 0x3;
@@ -577,10 +577,40 @@ impl App {
 
 
             let pad = self.s(EDIT_PAD);
-            rc.left += pad;
+            rc.left += pad + self.gutter_width(edit);
             rc.top += pad;
             rc.right = (rc.right - extra_w -  pad).max(rc.left + 1);
             SendMessageW(edit, EM_SETRECTNP, 0, &rc as *const RECT as isize);
+        }
+    }
+
+    /// Room for the line numbers of a colored file, with an `EDIT_PAD` gap before the text.
+    fn gutter_width(&self, edit: HWND) -> i32 {
+        let Some((_, zoom)) = self.syntax_lang(edit) else { return 0 };
+        unsafe {
+            let lines = SendMessageW(edit, EM_GETFILELINECOUNT, 0, 0).max(1);
+            let digits = (lines.ilog10() + 1).max(2) as i32;
+            let dc = GetDC(edit);
+            let old = SelectObject(dc, self.font);
+            let mut size: SIZE = std::mem::zeroed();
+            GetTextExtentPoint32W(dc, wide("0").as_ptr(), 1, &mut size);
+            SelectObject(dc, old);
+            ReleaseDC(edit, dc);
+            muldiv(size.cx * digits, zoom, 100) + self.s(EDIT_PAD)
+        }
+    }
+
+    /// Re-inset the text when the gutter changes: the line count gained or
+    /// lost a digit, or the file gained or lost its colors.
+    fn fit_gutter(&self, edit: HWND) {
+        unsafe {
+            let mut rc: RECT = std::mem::zeroed();
+            SendMessageW(edit, EM_GETRECT, 0, &mut rc as *mut RECT as isize);
+            if rc.left == self.s(EDIT_PAD) + self.gutter_width(edit) {
+                return;
+            }
+            self.pad_edit(edit);
+            InvalidateRect(edit, std::ptr::null(), 1);
         }
     }
 
@@ -998,6 +1028,7 @@ impl App {
         self.invalidate_chrome();
         self.set_message("");
         self.update_status();
+        self.fit_gutter(self.edit());
         self.fit_scrollbars();
         true
     }
@@ -1039,6 +1070,7 @@ impl App {
             if i == self.cur {
                 self.update_title();
                 self.update_status();
+                self.fit_gutter(e);
                 self.fit_scrollbars();
             }
         }
@@ -1069,6 +1101,8 @@ impl App {
         self.update_title();
         self.invalidate_chrome();
         self.update_status();
+        self.fit_gutter(self.edit());
+        self.fit_scrollbars();
         true
     }
 
@@ -1306,9 +1340,11 @@ impl App {
     fn paint_syntax(&mut self, edit: HWND, hdc: HDC) {
         let Some((lang, zoom)) = self.syntax_lang(edit) else { return };
         let font = self.zoomed_font(zoom);
+        let gap = self.s(EDIT_PAD);
         unsafe {
             if !hdc.is_null() {
                 syntax::paint(edit, hdc, lang, font, &mut self.syntax_cache);
+                syntax::paint_gutter(edit, hdc, font, gap);
                 return;
             }
             if IsWindowVisible(edit) == 0 {
@@ -1316,6 +1352,7 @@ impl App {
             }
             let dc = GetDC(edit);
             syntax::paint(edit, dc, lang, font, &mut self.syntax_cache);
+            syntax::paint_gutter(edit, dc, font, gap);
             ReleaseDC(edit, dc);
         }
     }
@@ -1595,6 +1632,8 @@ impl App {
                     for d in &self.docs {
                         InvalidateRect(d.edit, std::ptr::null(), 1);
                     }
+                    self.fit_gutter(e);
+                    self.fit_scrollbars();
                 }
                 IDM_ZOOM_IN => self.set_zoom(self.doc().zoom + 10),
                 IDM_ZOOM_OUT => self.set_zoom(self.doc().zoom - 10),
@@ -1894,6 +1933,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 }
                 if i == a.cur {
                     if code == EN_CHANGE {
+                        a.fit_gutter(a.edit());
                         a.update_title();
                         a.update_status();
                     }
